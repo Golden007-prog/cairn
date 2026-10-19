@@ -25,7 +25,7 @@ from typing import Any, Callable, Optional
 
 _log = logging.getLogger(__name__)
 
-INSTALL_HINT = "install cairn-operator-train-local[train] (torch, transformers, peft, datasets)"
+INSTALL_HINT = "install cairndev[train] (torch, transformers, peft, datasets)"
 #: Rows per optimizer step. Fixed, not a contract knob: a CPU fine-tune of this size is
 #: bounded by ``steps`` and ``max_seq_len``, and a batch larger than the dataset wraps.
 BATCH_SIZE = 4

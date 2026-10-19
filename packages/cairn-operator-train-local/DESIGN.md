@@ -117,7 +117,7 @@ the operation runs and a non-conforming output fails the run.
 
 | Symptom | Cause | What the operator returns | Fail closed? |
 |---|---|---|---|
-| `install cairn-operator-train-local[train]` | The `[train]` extra is absent (always on the engine image) | `TrainStackMissing` at run | Yes |
+| `install cairndev[train]` | The `[train]` extra is absent (always on the engine image) | `TrainStackMissing` at run | Yes |
 | `torch` cannot be installed | `torch>=2.11` publishes no Intel-macOS wheel | install error | Yes |
 | `dataset '…': no such file` | A path-shaped dataset names no file | `FileNotFoundError` | Yes |
 | `a row must be an object with a string 'text' field` | A malformed JSONL row | `ValueError` naming file and line | Yes |

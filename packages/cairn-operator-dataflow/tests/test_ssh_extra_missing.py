@@ -29,13 +29,13 @@ def test_submit_without_the_extra_names_it(no_operator_remote):
     with pytest.raises(EngineError) as ei:
         asyncio.run(eng.submit(spec, ctx))
     assert str(ei.value) == SSH_EXTRA_MISSING
-    assert "[ssh]" in str(ei.value) and "cairn-operator-remote" in str(ei.value)
+    assert "cairndev[ssh]" in str(ei.value) and "cairn-operator-" not in str(ei.value)  # ADR-0137 D5
     assert isinstance(ei.value.__cause__, ModuleNotFoundError)
 
 
 def test_poll_of_an_ssh_handle_without_the_extra_names_it(no_operator_remote):
     handle = EngineJobHandle(engine="builtin-ssh", job_id="box:/jobs/x", meta={})
-    with pytest.raises(EngineError, match=r"\[ssh\] extra"):
+    with pytest.raises(EngineError, match=r"cairndev\[ssh\]"):
         asyncio.run(BuiltinSshEngine("fixbox").poll(handle))
 
 

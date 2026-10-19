@@ -10,11 +10,11 @@ A real LoRA fine-tune on CPU, the builtin provider of the `train.finetune` capab
 | `train/eval-loss` | operation (`read_only`) | Scores a saved adapter: mean loss over a JSONL's rows. Implements `train.eval_loss/1.0.0`. |
 
 ```bash
-pip install 'cairndev[train]'          # or: pip install 'cairn-operator-train-local[train]'
+pip install 'cairndev[train]'
 ```
 
 Without the `[train]` extra the pack still installs, imports and registers (it is in the base
-install), and both operations refuse at run with `install cairn-operator-train-local[train]`.
+install), and both operations refuse at run with `install cairndev[train]`.
 `--mock` runs need no extra: they return a deterministic stand-in with a `mock://` adapter path,
 and the stage's mock describes no model artifact.
 

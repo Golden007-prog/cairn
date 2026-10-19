@@ -177,7 +177,7 @@ class MetaflowEngine:
         if kind in ("kubernetes", "batch") and not self._compute.get("image"):
             problems.append(
                 f"metaflow_compute={kind} needs metaflow_compute_image — remote "
-                "tasks run in a container that must ship cairn-operator-dataflow[engine] "
+                "tasks run in a container that must ship cairndev[dataflow-engine] "
                 "+ the flow's kernels (the SSH-box deployment contract)"
             )
         if self._retry_times < 0:

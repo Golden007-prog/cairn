@@ -87,16 +87,37 @@ scalars cross the engine boundary (ADR-0081 D3).
 without loading entry points, installing packages, or reading definition bodies. It is an
 internal pack-owner function; runtime consumers are not wired to it yet.
 
-The distribution inventory must list exactly one descriptor at
-`cairn_contracts/<normalized-distribution-name>/contracts.toml`. Its closed TOML shape is
+A *contract package* is one descriptor directory `cairn_contracts/<package>/contracts.toml`
+and the files beneath it. Its closed TOML shape is
 `format = "cairn.contracts/1"`, a `distribution` table (`name`, `version`), nonempty
 `definitions` tables (`id`, `revision`, `kind`, `path`), and optional `dependencies` tables
 (`distribution`, `version`). Kinds are `capability`, `schema`, or `report`; contract and
-dependency revisions use exact numeric `major.minor.patch`. Distribution identity must
-match installed metadata. Namespaced definition IDs have one distribution owner.
+dependency revisions use exact numeric `major.minor.patch`. The package's identity is that
+`distribution` table, whichever distribution installs it. Namespaced definition IDs have one
+package owner. A descriptor at any other depth, or a file under `cairn_contracts/` in no
+package directory, refuses (`_descriptors`).
 
-Definition paths are relative to that distribution's contract directory, must be listed
-in its inventory, and must resolve to files inside that directory. Malformed descriptors,
+<a id="contract-host-modes"></a>A distribution hosts packages in one of two modes
+(ADR-0111 P1 as amended by ADR-0137 D3; `_discover`, `_inspect`):
+
+- **Standalone** — every contract distribution except the engine's. Its inventory lists
+  exactly one descriptor, at `cairn_contracts/<normalized-distribution-name>/contracts.toml`,
+  and the descriptor's name and version must match the installed metadata. A second
+  descriptor refuses.
+- **Engine-hosted** — only the distribution named `ENGINE_DISTRIBUTION`
+  (`src/cairn/core/pack/loader.py`, `cairndev`). It may host any number of packages. Each
+  package's directory name must equal its descriptor's `name` (canonical form), and its
+  version is the descriptor's own, never compared with the host's version.
+
+A package name installed by two distributions (a standalone `cairn-contracts-audit` beside
+the copy inside `cairndev`, say) refuses, naming both and the remedy: uninstall the
+standalone one. Records are one per package (`ContractDistribution.name` = package,
+`version` = descriptor version) in both modes, so a package's recorded identity is the same
+standalone or hosted.
+
+Definition paths are relative to that package's contract directory, must be listed
+in the inventory of the distribution that installs it, and must resolve to files inside
+that directory. Malformed descriptors,
 duplicate identities/owners, missing assets, traversal and escaping symlinks raise
 `ContractDiscoveryError`. Results are sorted frozen records containing tuples.
 
@@ -337,12 +358,24 @@ marker.
 `registry.py:all_contract_definitions` and `registry.py:contract_resolution_snapshot` (#2240 C:
 the same closure as `cairn.resolution/1` data — names, versions, digests, never paths — for
 the launch door) are its only consumers, both stateless facades; an empty installation is
-`()` / an empty snapshot. One invalid distribution refuses the whole result. A distribution is
-accepted only when it is data-only — every inventoried path under `cairn_contracts/<name>/`
-or `<dist>.dist-info/`, no executable or `.pth` payload, no entry points, not an editable
-install — and its installed `Requires-Dist` equals the descriptor dependencies as exact
-`name==version` pins (no extras, markers or URLs). Declared dependencies must be installed at
-that version; dependency cycles refuse. Obligation evidence must be an inventoried asset.
+`()` / an empty snapshot. One invalid distribution refuses the whole result. Data-only is
+judged per [host mode](#contract-host-modes) (`_check_dependencies`):
+
+- **Standalone:** the distribution is accepted only when it is data-only — every inventoried
+  path under `cairn_contracts/<name>/` or `<dist>.dist-info/`, no executable or `.pth`
+  payload, no entry points, not an editable install (`_data_only`) — and its installed
+  `Requires-Dist` equals the descriptor dependencies as exact `name==version` pins (no
+  extras, markers or URLs).
+- **Engine-hosted:** each package is data-only — no inventoried path under
+  `cairn_contracts/<package>/` has an executable or `.pth` suffix (`_hosted_data_only`). The
+  host's own code, entry points, editability and `Requires-Dist` are the engine's and are not
+  judged. An editable `cairndev` is accepted: every descriptor and definition must still be
+  inventoried in its `RECORD` and resolve inside its install root, which holds for an
+  installed copy and never for a file on a live source path.
+
+In both modes, declared dependencies must be installed as packages at that exact version;
+dependency cycles refuse; references cross only into the package and its declared
+dependencies. Obligation evidence must be an inventoried asset.
 Results are frozen, sorted records carrying SHA-256 digests of the descriptor, each
 definition and each evidence file; paths are local lookup details, not identity. The proof
 installs test-built wheels with `uv pip install` into an isolated target and inspects them in

@@ -17,7 +17,7 @@
 #   INFISICAL_CLIENT_ID · INFISICAL_CLIENT_SECRET · INFISICAL_PROJECT_ID
 #   INFISICAL_ENVIRONMENT (default: dev — the operator's default; set it to your prod
 #   environment slug) · INFISICAL_HOST (self-host URL)
-# and `pip install cairn-operator-secrets-infisical[infisical]` in the image.
+# and `pip install 'cairndev[infisical]'` in the image.
 #
 # Verify with `cairn doctor` (the profile category checks every binding
 # resolves to a registered operator) and `cairn deploy doctor`.

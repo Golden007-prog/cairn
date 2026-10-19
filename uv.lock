@@ -1078,6 +1078,9 @@ dependencies = [
 auth = [
     { name = "pwdlib", extra = ["argon2"] },
 ]
+dataflow-engine = [
+    { name = "cairn-operator-dataflow", extra = ["engine"] },
+]
 dev = [
     { name = "blockbuster" },
     { name = "deepeval" },
@@ -1140,6 +1143,12 @@ rag-qdrant = [
 rag-sqlite-vec = [
     { name = "sqlite-vec" },
 ]
+rerank-cohere = [
+    { name = "cairn-operator-rag-rerank", extra = ["cohere"] },
+]
+rerank-cross-encoder = [
+    { name = "cairn-operator-rag-rerank", extra = ["cross-encoder"] },
+]
 runtime-dbos = [
     { name = "dbos" },
 ]
@@ -1199,6 +1208,7 @@ requires-dist = [
     { name = "cairn-operator-audit-store", editable = "packages/cairn-operator-audit-store" },
     { name = "cairn-operator-data-profile", editable = "packages/cairn-operator-data-profile" },
     { name = "cairn-operator-dataflow", editable = "packages/cairn-operator-dataflow" },
+    { name = "cairn-operator-dataflow", extras = ["engine"], marker = "extra == 'dataflow-engine'", editable = "packages/cairn-operator-dataflow" },
     { name = "cairn-operator-dataflow-metaflow", marker = "extra == 'metaflow'", editable = "packages/cairn-operator-dataflow-metaflow" },
     { name = "cairn-operator-dataflow-skypilot", marker = "extra == 'skypilot'", editable = "packages/cairn-operator-dataflow-skypilot" },
     { name = "cairn-operator-mcp", editable = "packages/cairn-operator-mcp" },
@@ -1206,6 +1216,8 @@ requires-dist = [
     { name = "cairn-operator-monitor-threshold", editable = "packages/cairn-operator-monitor-threshold" },
     { name = "cairn-operator-rag-local", editable = "packages/cairn-operator-rag-local" },
     { name = "cairn-operator-rag-rerank", editable = "packages/cairn-operator-rag-rerank" },
+    { name = "cairn-operator-rag-rerank", extras = ["cohere"], marker = "extra == 'rerank-cohere'", editable = "packages/cairn-operator-rag-rerank" },
+    { name = "cairn-operator-rag-rerank", extras = ["cross-encoder"], marker = "extra == 'rerank-cross-encoder'", editable = "packages/cairn-operator-rag-rerank" },
     { name = "cairn-operator-redact-regex", editable = "packages/cairn-operator-redact-regex" },
     { name = "cairn-operator-remote", editable = "packages/cairn-operator-remote" },
     { name = "cairn-operator-remote", extras = ["ssh"], marker = "extra == 'ssh'", editable = "packages/cairn-operator-remote" },
@@ -1274,7 +1286,7 @@ requires-dist = [
     { name = "trafilatura", marker = "extra == 'rag'", specifier = ">=2.0.0" },
     { name = "typer", specifier = ">=0.12.0" },
 ]
-provides-extras = ["dev", "telemetry", "rag", "pii", "rag-qdrant", "rag-pinecone", "rag-pgvector", "rag-sqlite-vec", "storage-postgres", "runtime-postgres", "runtime-sqlite", "runtime-temporal", "runtime-dbos", "optuna", "auth", "nats", "oauth", "infisical", "hello", "kernel", "ssh", "train", "metaflow", "skypilot"]
+provides-extras = ["dev", "telemetry", "rag", "pii", "rag-qdrant", "rag-pinecone", "rag-pgvector", "rag-sqlite-vec", "storage-postgres", "runtime-postgres", "runtime-sqlite", "runtime-temporal", "runtime-dbos", "optuna", "auth", "nats", "oauth", "infisical", "hello", "kernel", "ssh", "train", "dataflow-engine", "rerank-cross-encoder", "rerank-cohere", "metaflow", "skypilot"]
 
 [[package]]
 name = "casbin"

@@ -310,6 +310,13 @@ ssh = ["cairn-operator-remote[ssh]"]
 # transformers, peft, datasets). Separate from every other extra on purpose: CPU torch is
 # too large for the engine image, so Dockerfile.engine does not install it.
 train = ["cairn-operator-train-local[train]"]
+# ADR-0137 D5 — the builtin packs' own extras, named on the engine so a hint or a deployment never
+# names a builtin distribution (the public `cairndev` wheel carries the builtins, ADR-0137 D2).
+# The builtin dataflow engine's job-machine libraries (polars shards, duckdb, pyarrow).
+dataflow-engine = ["cairn-operator-dataflow[engine]"]
+# rag/rerank's cross-encoder (local torch model) and Cohere (network, COHERE_API_KEY) scorers.
+rerank-cross-encoder = ["cairn-operator-rag-rerank[cross_encoder]"]
+rerank-cohere = ["cairn-operator-rag-rerank[cohere]"]
 # ADR-0134 D2 (#2678) — the Metaflow dataflow engine: an optional public wheel, never a base
 # dependency. `[profile.backends] ml_engine = "metaflow"` without it is refused at the launch door.
 metaflow = ["cairn-operator-dataflow-metaflow", "metaflow>=2.12"]

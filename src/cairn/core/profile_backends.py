@@ -114,7 +114,7 @@ BACKENDS: list[BackendField] = [
     BackendField(
         key="dataflow_target", label="Dataflow compute target", group="Data plane", control="text",
         default="", env="CAIRN_DATAFLOW_TARGET", needs_connection=True,
-        description="Optional compute.ssh connection the BUILTIN engine dispatches to (#1050 slice 3): set = cairn-dataflow-run launches on that box via the proven remote/exec machinery; empty = local subprocess. The box installs cairn-operator-dataflow[engine] so the binary + kernels exist there (the fix-remote deployment contract).",
+        description="Optional compute.ssh connection the BUILTIN engine dispatches to (#1050 slice 3): set = cairn-dataflow-run launches on that box via the proven remote/exec machinery; empty = local subprocess. The box installs cairndev[dataflow-engine] so the binary + kernels exist there (the fix-remote deployment contract).",
     ),
     # ── ML plane (ADR-0082 D7, #1074) — kind: ml flows behind ml/run ──
     BackendField(
@@ -178,7 +178,7 @@ BACKENDS: list[BackendField] = [
     BackendField(
         key="metaflow_compute_image", label="Metaflow task image", group="Data plane", control="text",
         default="", env="CAIRN_METAFLOW_IMAGE",
-        description="Container image for remote Metaflow tasks (required when compute is kubernetes/batch). Must ship cairn-operator-dataflow[engine] + the flow's kernels — the same deployment contract as the SSH box.",
+        description="Container image for remote Metaflow tasks (required when compute is kubernetes/batch). Must ship cairndev[dataflow-engine] + the flow's kernels — the same deployment contract as the SSH box.",
     ),
     BackendField(
         key="metaflow_compute_queue", label="Metaflow batch queue", group="Data plane", control="text",
@@ -207,7 +207,7 @@ BACKENDS: list[BackendField] = [
     BackendField(
         key="skypilot_image", label="SkyPilot task image", group="Data plane", control="text",
         default="", env="CAIRN_SKYPILOT_IMAGE",
-        description="Container image the provisioned machine runs (ADR-0104 D1: the image is the unit of remote work, so nothing on the machine can drift). Empty = the task installs cairn-operator-dataflow[engine] in its setup step, which is slower and driftable — set this in production.",
+        description="Container image the provisioned machine runs (ADR-0104 D1: the image is the unit of remote work, so nothing on the machine can drift). Empty = the task installs cairndev[dataflow-engine] in its setup step, which is slower and driftable — set this in production.",
     ),
     BackendField(
         key="skypilot_accelerator", label="SkyPilot accelerator type", group="Data plane", control="text",

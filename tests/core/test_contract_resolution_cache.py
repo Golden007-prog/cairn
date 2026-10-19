@@ -16,7 +16,7 @@ import pytest
 from cairn.core.pack import contracts
 from cairn.core.pack import registry as pack_registry
 from cairn.core.pack.contracts import ContractDiscoveryError, resolve_contracts
-from tests.core.test_contract_discovery import alpha, beta
+from tests.core.test_contract_discovery import alpha, beta, engine, hosted_alpha, hosted_beta
 
 
 @pytest.fixture
@@ -121,3 +121,16 @@ def test_a_file_edited_while_it_was_being_resolved_is_not_kept(tmp_path, monkeyp
     monkeypatch.setattr(contracts, "_read_bodies", real)
     resolve_contracts()
     assert len(counted) == 2, "a result whose files changed under it must not be kept"
+
+
+def test_an_upgrade_or_reinstall_of_the_engine_host_resolves_again(tmp_path, monkeypatch, counted):
+    """ADR-0137 D3: the engine's ``RECORD`` stamp keys the kept resolution like any other."""
+    old = engine(tmp_path)
+    new = engine(tmp_path / "v2", version="0.2.0", packages=[hosted_alpha("1.1.0"), hosted_beta(alpha_version="1.1.0")])
+    monkeypatch.setattr(contracts, "installed_distributions", lambda: [old])
+    assert resolve_contracts() is resolve_contracts()
+    monkeypatch.setattr(contracts, "installed_distributions", lambda: [new])          # upgrade
+    assert [d.version for d in resolve_contracts()] == ["1.1.0", "1.0.0"]
+    os.utime(pathlib.Path(new._path) / "RECORD", ns=(1, 1))                            # reinstalled in place
+    resolve_contracts()
+    assert len(counted) == 3

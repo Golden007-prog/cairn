@@ -117,6 +117,11 @@ env -u CAIRN_STORAGE .venv/bin/pytest tests/core -q
 6. **Regenerate what your change invalidates.** A pack edit needs
    `uv run cairn lock`. It is a
    CI gate, and it has been missed before.
+7. **Sign off every commit (DCO).** Contributions are Apache-2.0 under the
+   [Developer Certificate of Origin](https://developercertificate.org/): commit
+   with `git commit -s`, which adds a `Signed-off-by: Your Name <you@example.com>`
+   line matching the commit author. The public repository's `dco` check refuses a
+   pull request with an unsigned commit; `git rebase --signoff main` fixes a branch after the fact.
 
 ### What review looks for
 

@@ -447,18 +447,25 @@ def installed(tmp_path, name, version='1.0.0', *, definitions=(), files=(), requ
     return PathDistribution(info)
 
 
-def alpha(tmp_path, **changes):
+def alpha_definitions():
     schema = {'$schema': SCHEMA_URI, '$id': 'contract://alpha.data/1.0.0', 'type': 'object',
               '$defs': {'a/b~c': {'type': 'integer'}}, 'properties': {'n': {'$ref': '#/$defs/a~1b~0c'}}}
     report = {'format': 'cairn.report/1', 'id': 'alpha.report', 'revision': '1.0.0',
               'spec': {'series': [{'name': 'loss', 'unit': ''}]}}
-    spec = dict(definitions=[('alpha.data', '1.0.0', 'schema', 'data.json', schema),
-                             ('alpha.report', '1.0.0', 'report', 'report.json', report)])
+    return [('alpha.data', '1.0.0', 'schema', 'data.json', schema),
+            ('alpha.report', '1.0.0', 'report', 'report.json', report)]
+
+
+def alpha(tmp_path, **changes):
+    spec = dict(definitions=alpha_definitions())
     spec.update(changes)
     return installed(tmp_path, 'alpha-contracts', **spec)
 
 
-def beta(tmp_path, *, capability_changes=None, schema_changes=None, **changes):
+BETA_EVIDENCE = ('cairn_contracts/beta-contracts/docs/identity.md', b'# identity\n')
+
+
+def beta_definitions(capability_changes=None, schema_changes=None):
     schema = {'$schema': SCHEMA_URI, '$id': 'contract://beta.result/1.0.0',
               'allOf': [{'$ref': 'contract://alpha.data/1.0.0'}, {'$ref': 'contract://alpha.data/1.0.0#/$defs/a~1b~0c'}]}
     schema.update(schema_changes or {})
@@ -467,9 +474,12 @@ def beta(tmp_path, *, capability_changes=None, schema_changes=None, **changes):
                   'output': 'contract://beta.result/1.0.0', 'report': 'contract://alpha.report/1.0.0',
                   'obligations': [{'name': 'identity', 'description': 'Keep it', 'evidence': 'docs/identity.md'}]}
     capability.update(capability_changes or {})
-    spec = dict(definitions=[('beta.result', '1.0.0', 'schema', 'result.json', schema),
-                             ('beta.run', '1.0.0', 'capability', 'run.json', capability)],
-                files=[('cairn_contracts/beta-contracts/docs/identity.md', b'# identity\n')],
+    return [('beta.result', '1.0.0', 'schema', 'result.json', schema),
+            ('beta.run', '1.0.0', 'capability', 'run.json', capability)]
+
+
+def beta(tmp_path, *, capability_changes=None, schema_changes=None, **changes):
+    spec = dict(definitions=beta_definitions(capability_changes, schema_changes), files=[BETA_EVIDENCE],
                 requires=['alpha-contracts==1.0.0'], dependencies=[('alpha-contracts', '1.0.0')])
     spec.update(changes)
     return installed(tmp_path, 'beta-contracts', **spec)
@@ -821,3 +831,145 @@ def test_invocation_definitions_and_contract_facades(tmp_path, monkeypatch):
     transitive = [(uri, 'f' * 64 if uri == 'contract://alpha.data/1.0.0' else d) for uri, d in closure]
     with pytest.raises(ContractDiscoveryError, match='differs from the recorded'):      # a $ref target drifted
         pack_registry.invocation_contract([r for r in recorded if 'alpha.data' not in r[0]], transitive)
+
+
+# ── ADR-0137 D3: the engine distribution may host several contract packages ───
+
+ENGINE_SCRIPTS = '[console_scripts]\ncairn = cairn.cli:main\n[cairn.operators]\necho = operator_echo:Pack\n'
+EDITABLE = '{"url": "file:///src/cairn", "dir_info": {"editable": true}}'
+
+
+def host(tmp_path, packages, *, name='cairndev', version='0.1.0', files=(), metadata_files=(), requires=(),
+         unlisted=()):
+    """An installed-layout engine distribution: its own code (``cairn/__init__.py``) plus
+    ``cairn_contracts/<package>/`` for each ``(package, version, definitions, dependencies)``,
+    definitions as in :func:`installed`. ``files`` are extra (path, bytes) under the root;
+    ``unlisted`` paths are written but left out of ``RECORD``."""
+    root = tmp_path / f'{name}-{version}'
+    info = root / f"{name.replace('-', '_')}-{version}.dist-info"
+    info.mkdir(parents=True, exist_ok=True)
+    requires_text = ''.join(f'Requires-Dist: {r}\n' for r in requires)
+    (info / 'METADATA').write_text(f'Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n{requires_text}')
+    for filename, text in metadata_files:
+        (info / filename).write_text(text)
+    written = [('cairn/__init__.py', b'')]
+    for package, package_version, definitions, dependencies in packages:
+        for _, _, _, path, body in definitions:
+            written.append((f'cairn_contracts/{package}/{path}', body if isinstance(body, bytes) else json.dumps(body).encode()))
+        written.append((f'cairn_contracts/{package}/contracts.toml',
+                        descriptor(package, package_version, [d[:4] for d in definitions], dependencies)))
+    for path, data in [*written, *files]:
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_bytes(data)
+    inventory = [path for path, _ in [*written, *files] if path not in unlisted]
+    (info / 'RECORD').write_text(''.join(f'{p},,\n' for p in inventory) + f'{info.name}/METADATA,,\n')
+    return PathDistribution(info)
+
+
+def hosted_alpha(version='1.0.0'):
+    return ('alpha-contracts', version, alpha_definitions(), ())
+
+
+def hosted_beta(version='1.0.0', alpha_version='1.0.0'):
+    return ('beta-contracts', version, beta_definitions(), [('alpha-contracts', alpha_version)])
+
+
+def engine(tmp_path, **changes):
+    """``cairndev`` hosting alpha and beta exactly as the standalone fixtures ship them."""
+    spec = dict(packages=[hosted_alpha(), hosted_beta()], files=[BETA_EVIDENCE])
+    spec.update(changes)
+    return host(tmp_path, spec.pop('packages'), **spec)
+
+
+def test_one_engine_host_gives_one_record_per_package_at_the_descriptor_version(tmp_path):
+    dist = engine(tmp_path, packages=[hosted_alpha('1.1.0'), hosted_beta('1.0.0', alpha_version='1.1.0')])
+    assert [(d.name, d.version) for d in discover_contracts(distributions=[dist])] == [
+        ('alpha-contracts', '1.1.0'), ('beta-contracts', '1.0.0')]
+    result = resolve(dist)
+    assert [(d.name, d.version, d.closure) for d in result] == [
+        ('alpha-contracts', '1.1.0', ()), ('beta-contracts', '1.0.0', ('alpha-contracts',))]
+    assert {x.version for x in result[0].definitions} == {'1.1.0'}       # never the host's 0.1.0
+
+
+@pytest.mark.parametrize('changes', [
+    dict(metadata_files=[('direct_url.json', EDITABLE)]),                                     # editable, inventoried copies
+    dict(metadata_files=[('entry_points.txt', ENGINE_SCRIPTS)], requires=['requests>=2', 'pyyaml; extra == "x"']),
+])
+def test_an_editable_engine_host_or_one_with_entry_points_and_loose_requirements_resolves(tmp_path, changes):
+    assert [d.name for d in resolve(engine(tmp_path, **changes))] == ['alpha-contracts', 'beta-contracts']
+
+
+def test_a_hosted_package_depends_on_a_hosted_package_at_its_exact_version(tmp_path):
+    result = resolve(engine(tmp_path))
+    run = {d.id: d for d in result[1].definitions}['beta.run']
+    assert result[1].dependencies == (('alpha-contracts', '1.0.0'),) and result[1].closure == ('alpha-contracts',)
+    assert 'contract://alpha.data/1.0.0' in run.references
+
+
+def test_recorded_identity_is_the_same_standalone_and_hosted(tmp_path, monkeypatch):
+    a, b = alpha(tmp_path / 'standalone'), beta(tmp_path / 'standalone')
+    monkeypatch.setattr(contracts, 'installed_distributions', lambda: [b, a])
+    standalone = pack_registry.contract_resolution_snapshot()
+    data = pack_registry.invocation_definitions('contract://beta.run/1.0.0')
+    recorded = [(f"contract://{d['id']}/{d['revision']}", d['digest']) for d in data['definitions']]
+    dist = engine(tmp_path / 'hosted')
+    monkeypatch.setattr(contracts, 'installed_distributions', lambda: [dist])
+    assert pack_registry.contract_resolution_snapshot() == standalone
+    closure = [(f"contract://{x.id}/{x.revision}", x.digest) for d in resolve(dist) for x in d.definitions]
+    assert pack_registry.invocation_contract(recorded, closure)['capability_ref'] == 'contract://beta.run/1.0.0'
+
+
+def test_a_second_engine_named_distribution_never_hosts(tmp_path):
+    """Owner decision 2a: one engine is the only host, so a shadowed second ``cairndev`` dist-info
+    (another sys.path entry) is refused rather than trusted to host packages of its own."""
+    with pytest.raises(ContractDiscoveryError, match='more than one cairndev distribution'):
+        resolve(host(tmp_path, [hosted_alpha()]), host(tmp_path, [hosted_alpha()], version='0.2.0'))
+
+
+def test_a_non_engine_distribution_with_two_descriptors_refuses(tmp_path):
+    with pytest.raises(ContractDiscoveryError, match='exactly one descriptor'):
+        resolve(engine(tmp_path, name='other-engine'))
+
+
+def _rename_descriptor(dist, package, new):
+    manifest = Path(dist.locate_file(f'cairn_contracts/{package}/contracts.toml'))
+    manifest.write_text(manifest.read_text().replace(f'name = "{package}"', f'name = "{new}"'))
+    return dist
+
+
+def _escape(dist, tmp_path):
+    data = Path(dist.locate_file('cairn_contracts/alpha-contracts/data.json'))
+    outside = tmp_path / 'outside.json'
+    outside.write_bytes(data.read_bytes())
+    data.unlink()
+    data.symlink_to(outside)
+    return dist
+
+
+@pytest.mark.parametrize('build,reason', [
+    (lambda t: _rename_descriptor(engine(t), 'alpha-contracts', 'gamma-contracts'), 'name mismatch'),
+    (lambda t: engine(t, files=[BETA_EVIDENCE, ('cairn_contracts/alpha-contracts/helper.py', b'')]),
+     'hosted contract package is not data-only'),
+    (lambda t: engine(t, files=[BETA_EVIDENCE, ('cairn_contracts/alpha-contracts/hook.pth', b'/src')]),
+     'hosted contract package is not data-only'),
+    (lambda t: engine(t, unlisted=['cairn_contracts/alpha-contracts/contracts.toml']), 'sits in no contract package'),
+    (lambda t: engine(t, unlisted=['cairn_contracts/beta-contracts/run.json']), 'absent from distribution inventory'),
+    (lambda t: _escape(engine(t), t), 'escapes'),
+    (lambda t: engine(t, files=[BETA_EVIDENCE, ('cairn_contracts/x.json', b'{}')]), 'sits in no contract package'),
+    (lambda t: engine(t, packages=[hosted_alpha(), ('gamma-contracts', '1.0.0', alpha_definitions()[:1], ())], files=[]),
+     'conflicting contract identity owners'),
+    (lambda t: engine(t, packages=[hosted_beta()]), 'not installed at that version'),                       # missing
+    (lambda t: engine(t, packages=[hosted_alpha('1.0.1'), hosted_beta()]), 'not installed at that version'),
+    (lambda t: engine(t, packages=[(*hosted_alpha()[:3], [('beta-contracts', '1.0.0')]), hosted_beta()]), 'cycle'),
+])
+def test_a_hosted_package_that_breaks_a_kept_rule_refuses(tmp_path, build, reason):
+    with pytest.raises(ContractDiscoveryError, match=reason):
+        resolve(build(tmp_path))
+
+
+def test_a_package_installed_standalone_and_hosted_refuses_naming_both_hosts(tmp_path):
+    with pytest.raises(ContractDiscoveryError) as refused:
+        resolve(alpha(tmp_path), host(tmp_path, [hosted_alpha()]))
+    message = str(refused.value)
+    assert 'contract package alpha-contracts is installed twice, by alpha-contracts and by cairndev' in message
+    assert 'uninstall the standalone one' in message

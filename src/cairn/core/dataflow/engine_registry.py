@@ -137,7 +137,7 @@ def _not_installed_message(choice: str, kind: str) -> str:
     available = installed_engines()
     have = ", ".join(available) if available else (
         "none — no pack registers a `cairn.dataflow_engines` entry point "
-        "(install cairn-operator-dataflow)"
+        "(install cairndev)"
     )
     return (
         f"{kind} flow engine {choice!r} is selected but not installed — "

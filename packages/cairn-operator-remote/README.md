@@ -9,6 +9,6 @@ step to a box you control.
 - **Connection:** `cairn connect ssh` → a `compute.ssh` connection (host/user/port +
   `known_hosts`); the private key is held in the SecretStore. Key-based auth,
   host-key verified (never disabled).
-- **Install:** `pip install 'cairn-operator-remote[ssh]'` (asyncssh).
+- **Install:** `pip install 'cairndev[ssh]'` (asyncssh).
 - **Foundation for** the NATS remote-worker channel (events-up/control-down), which
   reuses the JetStream substrate.

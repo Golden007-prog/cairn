@@ -39,9 +39,14 @@ COPY pyproject.toml uv.lock README.md ./
 # false`): absent, the install plan fails; installed, the launch door resolves them.
 # #2421 — the private platform's product modules (packages/cairn-platform) are a member too.
 COPY packages ./packages
-# A `find` rather than 41 explicit COPY lines, so a newly added workspace member
-# is picked up automatically instead of silently failing the deps sync. Anything
-# it sweeps up that is absent from [tool.uv.workspace] is harmless: uv ignores it.
+# The example pack is a workspace member too (examples/hello-cairn, #2693): its manifest is
+# staged here as well as its source in the builder stage.
+COPY examples ./examples
+# A `find` rather than 41 explicit COPY lines, so a new workspace member UNDER THE
+# DIRECTORIES COPIED ABOVE is picked up automatically. A member anywhere else needs a
+# COPY here AND in the builder stage, or the deps sync fails; the public tree's test
+# (tests/scripts/test_assemble_public_tree.py) checks both stages. Anything the find
+# sweeps up that is absent from [tool.uv.workspace] is harmless: uv ignores it.
 # POSIX `mkdir -p`/`cp` rather than GNU `cp --parents`: same result, and it is
 # the form that can be exercised outside a Linux container.
 RUN mkdir -p /manifests && \

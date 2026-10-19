@@ -86,7 +86,7 @@ def no_train_stack(monkeypatch):
 @pytest.mark.parametrize("op,inp", [(TrainLoraOp, {"dataset": ROWS}),
                                     (EvalLossOp, {"adapter_path": "/nowhere", "dataset": ROWS})])
 def test_without_the_extra_both_operations_refuse_naming_it(op, inp):
-    with pytest.raises(F.TrainStackMissing, match=r"install cairn-operator-train-local\[train\]"):
+    with pytest.raises(F.TrainStackMissing, match=r"install cairndev\[train\]"):
         asyncio.run(run_operator_for_test(op, inp))
 
 
@@ -94,7 +94,7 @@ def test_without_the_extra_both_operations_refuse_naming_it(op, inp):
 def test_without_the_extra_the_stage_refuses_and_its_mock_still_runs(tmp_path):
     from operator_train_local.stages import train_lora
 
-    with pytest.raises(F.TrainStackMissing, match=r"cairn-operator-train-local\[train\]"):
+    with pytest.raises(F.TrainStackMissing, match=r"cairndev\[train\]"):
         train_lora(tmp_path, {"dataset": ROWS, "steps": 1}, [])
     stats = train_lora(tmp_path, {"dataset": ROWS, "mock": True, "output_dir": str(tmp_path / "a")}, [])
     assert TrainLoraOutput(**{k: stats[k] for k in TrainLoraOutput.model_fields})

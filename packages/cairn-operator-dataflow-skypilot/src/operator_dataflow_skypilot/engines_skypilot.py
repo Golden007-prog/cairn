@@ -138,7 +138,7 @@ FETCH_TIMEOUT_S = 600
 
 #: What a bare VM needs before it can run that binary, when no image is
 #: configured. An image is the better answer (ADR-0104 D1) and wins when set.
-DEFAULT_SETUP = "pip install 'cairn-operator-dataflow[engine]'"
+DEFAULT_SETUP = "pip install 'cairndev[dataflow-engine]'"
 
 #: SkyPilot job states → the engine vocabulary. A cluster can be UP while its
 #: job is anything; the JOB is what the run cares about.

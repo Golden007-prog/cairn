@@ -58,7 +58,7 @@ def _require_ssh():
         import asyncssh  # noqa: F401, PLC0415
     except ImportError as e:  # pragma: no cover - exercised by the no-dep test
         raise RuntimeError(
-            "remote/exec needs asyncssh: pip install 'cairn-operator-remote[ssh]'"
+            "remote/exec needs asyncssh: pip install 'cairndev[ssh]'"
         ) from e
 
 

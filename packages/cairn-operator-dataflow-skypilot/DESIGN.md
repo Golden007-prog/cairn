@@ -119,7 +119,7 @@ None. The pack registers one `cairn.dataflow_engines` entry, `skypilot` →
 | `skypilot_image` / `CAIRN_SKYPILOT_IMAGE` | backend field | deployment | `` | image the provisioned machine runs; empty = a `pip install` setup step (slower, driftable) |
 | `skypilot_accelerator` / `CAIRN_SKYPILOT_ACCELERATOR` | backend field | deployment | `` | the accelerator TYPE the target offers (`A100`, `T4`); the COUNT is the stage's `gpu` hint, sent as `<type>:<count>`. A flow asking for GPUs with this empty is refused |
 | `skypilot_use_spot` / `CAIRN_SKYPILOT_USE_SPOT` | backend field | deployment | `false` | ask for pre-emptible capacity; a reclaimed machine surfaces as a RETRIABLE failure |
-| `CAIRN_SKYPILOT_SETUP` | env | deployment | `pip install 'cairn-operator-dataflow[engine]'` | override the setup line for a bare VM |
+| `CAIRN_SKYPILOT_SETUP` | env | deployment | `pip install 'cairndev[dataflow-engine]'` | override the setup line for a bare VM |
 | `CAIRN_SKYPILOT_HOURLY_USD` | env | deployment | — | price used for the pre-launch estimate when the connection declares none |
 | `CAIRN_SKY_SDK_FACTORY` | env | dev/test | — | point the SkyPilot seam at a fake; unset in production |
 

@@ -94,8 +94,16 @@ def _asset(dist: Distribution, inventory: set[str], root: Path, relative: str) -
     return resolved
 
 
-def _inspect(dist: Distribution, inventory: set[str], descriptor: str) -> ContractDistribution:
-    name = canonicalize_name(_string(dist.metadata.get("Name")), validate=True)
+def _inspect(dist: Distribution, inventory: set[str], descriptor: str, hosted: bool) -> ContractDistribution:
+    """One contract package. Standalone: the package is the distribution (its name and
+    installed version). Hosted by the engine (ADR-0137 D3): the package is its directory,
+    named by its own descriptor, at the descriptor's version, whatever the host's version."""
+    if hosted:
+        name = PurePosixPath(descriptor).parts[1]
+        if name != canonicalize_name(name, validate=True):
+            raise ContractDiscoveryError("hosted contract directory is not a canonical package name")
+    else:
+        name = canonicalize_name(_string(dist.metadata.get("Name")), validate=True)
     expected = f"cairn_contracts/{name}/contracts.toml"
     if descriptor != expected:
         raise ContractDiscoveryError("contract layout does not match distribution identity")
@@ -113,7 +121,7 @@ def _inspect(dist: Distribution, inventory: set[str], descriptor: str) -> Contra
     if canonicalize_name(_string(identity["name"]), validate=True) != name:
         raise ContractDiscoveryError("descriptor distribution name mismatch")
     version = _string(identity["version"])
-    if version != dist.version:
+    if not hosted and version != dist.version:
         raise ContractDiscoveryError("descriptor distribution version mismatch")
     definitions = _definitions(dist, inventory, asset_root, name, raw["definitions"])
     dependencies = _dependencies(raw.get("dependencies", []))
@@ -156,33 +164,57 @@ def _dependencies(dependencies: object) -> tuple[tuple[str, str], ...]:
     return tuple(sorted(required.items()))
 
 
-def _descriptor(inventory: set[str]) -> str | None:
+def _descriptors(inventory: set[str]) -> list[str]:
+    """Every ``cairn_contracts/<package>/contracts.toml`` the inventory lists. A descriptor at
+    any other depth, or a file under ``cairn_contracts/`` in no package directory, refuses."""
     declared = sorted(p for p in inventory if p.startswith("cairn_contracts/"))
-    if not declared:
-        return None
     descriptors = [p for p in declared if PurePosixPath(p).name == "contracts.toml"]
-    if len(descriptors) != 1:
-        raise ContractDiscoveryError("contract distribution must inventory exactly one descriptor")
-    return descriptors[0]
+    if any(len(PurePosixPath(p).parts) != 3 for p in descriptors):
+        raise ContractDiscoveryError("a contract descriptor must sit at cairn_contracts/<package>/contracts.toml")
+    packages = {PurePosixPath(p).parts[1] for p in descriptors}
+    if any(len(PurePosixPath(p).parts) < 3 or PurePosixPath(p).parts[1] not in packages for p in declared):
+        raise ContractDiscoveryError("a file under cairn_contracts/ sits in no contract package directory")
+    return descriptors
 
 
-def _discover(distributions: Iterable[Distribution] | None) -> list[tuple[Distribution, set[str], ContractDistribution]]:
+def _discover(distributions: Iterable[Distribution] | None
+              ) -> list[tuple[Distribution, set[str], ContractDistribution, bool]]:
+    """``(dist, inventory, package, hosted)`` by package name. Only the engine distribution
+    hosts packages it is not named after, any number of them (ADR-0137 D3); every other
+    contract distribution is standalone: one descriptor, named after it (ADR-0111)."""
+    from cairn.core.pack.loader import ENGINE_DISTRIBUTION  # noqa: PLC0415 — keep contracts off the loader's import path
     results = {}
     owners = {}
+    engine_hosts = 0
     for dist in installed_distributions() if distributions is None else distributions:
         try:
             inventory = {str(path) for path in (dist.files or ())}
-            descriptor = _descriptor(inventory)
-            if descriptor is None:
+            descriptors = _descriptors(inventory)
+            if not descriptors:
                 continue
-            item = _inspect(dist, inventory, descriptor)
-            if item.name in results:
-                raise ContractDiscoveryError("duplicate installed contract distribution")
-            for definition in item.definitions:
-                if definition.id in owners and owners[definition.id] != item.name:
-                    raise ContractDiscoveryError("conflicting contract identity owners")
-                owners[definition.id] = item.name
-            results[item.name] = (dist, inventory, item)
+            host = _string(dist.metadata.get("Name"))
+            hosted = canonicalize_name(host) == ENGINE_DISTRIBUTION
+            if hosted:
+                # One engine is the only host (owner decision 2a): a second dist-info named after it
+                # (a shadowed install on another sys.path entry) never hosts packages of its own.
+                engine_hosts += 1
+                if engine_hosts > 1:
+                    raise ContractDiscoveryError(
+                        f"more than one {ENGINE_DISTRIBUTION} distribution is installed: remove the stale one")
+            if not hosted and len(descriptors) != 1:
+                raise ContractDiscoveryError("contract distribution must inventory exactly one descriptor")
+            for descriptor in descriptors:
+                item = _inspect(dist, inventory, descriptor, hosted)
+                if item.name in results:
+                    other = results[item.name][0].metadata.get("Name")
+                    raise ContractDiscoveryError(
+                        f"contract package {item.name} is installed twice, by {other} and by {host}: "
+                        "uninstall the standalone one (ADR-0137)")
+                for definition in item.definitions:
+                    if definition.id in owners and owners[definition.id] != item.name:
+                        raise ContractDiscoveryError("conflicting contract identity owners")
+                    owners[definition.id] = item.name
+                results[item.name] = (dist, inventory, item, hosted)
         except (OSError, ValueError, RuntimeError) as exc:
             if isinstance(exc, ContractDiscoveryError):
                 raise
@@ -197,7 +229,7 @@ def discover_contracts(*, distributions: Iterable[Distribution] | None = None) -
     here (``resolve_contracts`` is). The returned inventory must not be treated as executable
     or conformant.
     """
-    return tuple(item for _, _, item in _discover(distributions))
+    return tuple(item for _, _, item, _ in _discover(distributions))
 
 
 _SCHEMA_MAPS = {'properties', '$defs'}
@@ -478,6 +510,14 @@ def _data_only(dist: Distribution, inventory: set[str], name: str) -> None:
             raise ContractDiscoveryError('contract distribution is not data-only')
 
 
+def _hosted_data_only(inventory: set[str], name: str) -> None:
+    """A package the engine hosts is data-only per package (ADR-0137 D3): no executable or
+    ``.pth`` under its directory. The host's code, entry points, editability and requirements
+    are the engine's and are not judged here."""
+    if any(PurePosixPath(p).suffix.lower() in _EXECUTABLE for p in inventory if p.startswith(f'cairn_contracts/{name}/')):
+        raise ContractDiscoveryError('hosted contract package is not data-only')
+
+
 def _runtime_requirements(dist: Distribution) -> tuple[tuple[str, str], ...]:
     found = {}
     for text in dist.metadata.get_all('Requires-Dist') or ():
@@ -585,22 +625,26 @@ def _evidence(dist: Distribution, inventory: set[str], root: Path, name: str, va
     return tuple(sorted(found.items()))
 
 
-def _read_bodies(entries: list[tuple[Distribution, set[str], ContractDistribution]]) -> dict[str, _Body]:
+def _read_bodies(entries: list[tuple[Distribution, set[str], ContractDistribution, bool]]) -> dict[str, _Body]:
     bodies = {}
-    for _, _, item in entries:
+    for _, _, item, _ in entries:
         for definition in item.definitions:
             contents, value = _read_definition(definition)
             bodies[f'contract://{definition.id}/{definition.revision}'] = _Body(definition, item.name, contents, value)
     return bodies
 
 
-def _check_dependencies(entries: list[tuple[Distribution, set[str], ContractDistribution]]) -> dict[str, tuple[str, ...]]:
-    items = {item.name: item for _, _, item in entries}
+def _check_dependencies(entries: list[tuple[Distribution, set[str], ContractDistribution, bool]]
+                        ) -> dict[str, tuple[str, ...]]:
+    items = {item.name: item for _, _, item, _ in entries}
     graph = {}
-    for dist, inventory, item in entries:
-        _data_only(dist, inventory, item.name)
-        if _runtime_requirements(dist) != item.dependencies:
-            raise ContractDiscoveryError('descriptor dependencies differ from installed requirements')
+    for dist, inventory, item, hosted in entries:
+        if hosted:
+            _hosted_data_only(inventory, item.name)
+        else:
+            _data_only(dist, inventory, item.name)
+            if _runtime_requirements(dist) != item.dependencies:
+                raise ContractDiscoveryError('descriptor dependencies differ from installed requirements')
         for dependency, version in item.dependencies:
             if dependency not in items or items[dependency].version != version:
                 raise ContractDiscoveryError('declared contract dependency is not installed at that version')
@@ -608,14 +652,14 @@ def _check_dependencies(entries: list[tuple[Distribution, set[str], ContractDist
     return {name: _closure(name, graph) for name in graph}
 
 
-def _resolve_all_references(entries: list[tuple[Distribution, set[str], ContractDistribution]],
+def _resolve_all_references(entries: list[tuple[Distribution, set[str], ContractDistribution, bool]],
                             bodies: dict[str, _Body]) -> dict[str, tuple[str, ...]]:
     registry = Registry().with_resources(
         (uri, Resource.from_contents(body.value, default_specification=DRAFT202012))
         for uri, body in bodies.items() if body.definition.kind == 'schema')
     targets: dict[int, object] = {}
     references = {}
-    for _, _, item in entries:
+    for _, _, item, _ in entries:
         allowed = {item.name, *(dependency for dependency, _ in item.dependencies)}
         for definition in item.definitions:
             uri = f'contract://{definition.id}/{definition.revision}'
@@ -754,7 +798,7 @@ def _resolve_contracts(distributions: Iterable[Distribution] | None
         bodies = _read_bodies(entries)
         references = _resolve_all_references(entries, bodies)
         resolved = tuple(_resolve_distribution(dist, inventory, item, closures[item.name], bodies, references)
-                         for dist, inventory, item in entries)
+                         for dist, inventory, item, _ in entries)
         return resolved, {f"contract://{d.id}/{d.revision}": (d, bodies[f"contract://{d.id}/{d.revision}"].value)
                           for x in resolved for d in x.definitions}
     except (OSError, ValueError, TypeError, AttributeError, RecursionError, Unresolvable) as exc:

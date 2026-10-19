@@ -13,7 +13,7 @@ Selected by the environment: ``CAIRN_DATAFLOW_ENGINE=builtin`` +
 on the control plane — everything poll/cancel need rides in the handle meta,
 so it survives restarts like fix-remote did.
 
-Requires the ``[ssh]`` extra (= ``cairn-operator-remote[ssh]``) — imports are lazy
+Requires the ``cairndev[ssh]`` extra (asyncssh for ``remote/exec``) — imports are lazy
 so the base wheel stays dep-free (D5).
 """
 from __future__ import annotations
@@ -157,10 +157,10 @@ def _docker_command(image: str, inner: str, env_names: Iterable[str], gpus: str)
 
 
 #: What an install without the [ssh] extra is told, instead of an ImportError
-#: traceback (#2417). The extra is what puts cairn-operator-remote (and asyncssh) here.
+#: traceback (#2417). The extra is what puts asyncssh (remote/exec's transport) here.
 SSH_EXTRA_MISSING = (
-    "the builtin engine's SSH dispatch (CAIRN_DATAFLOW_TARGET) needs the [ssh] extra, "
-    "which provides cairn-operator-remote: pip install 'cairn-operator-dataflow[ssh]'"
+    "the builtin engine's SSH dispatch (CAIRN_DATAFLOW_TARGET) needs the ssh extra "
+    "(asyncssh): pip install 'cairndev[ssh]'"
 )
 _SSH_EXTRA_MODULES = frozenset({"operator_remote", "asyncssh"})
 
@@ -175,9 +175,9 @@ def _raise_if_ssh_extra_missing(e: ModuleNotFoundError) -> None:
 
 
 def _remote_exec():
-    # optional dependency: the [ssh] extra (cairn-operator-remote[ssh]) — lazy so the
-    # base cairn-operator-dataflow wheel imports without it. Known debt: a builtin
-    # importing an official pack (#2419 moves SSH behind cairn[ssh]).
+    # optional dependency: the cairndev[ssh] extra (asyncssh) — lazy so the
+    # base install imports without it. Known debt: a builtin importing another builtin's
+    # module (#2419); the transport (asyncssh) arrives with cairndev[ssh].
     try:
         from operator_remote.operators import exec as remote_exec  # noqa: PLC0415
     except ModuleNotFoundError as e:

@@ -152,7 +152,7 @@ def test_build_task_uses_the_image_when_one_is_configured():
 
 def test_build_task_falls_back_to_a_pip_setup_line_without_an_image():
     task = sp.build_task(_spec(), name="c", accelerator="A100")
-    assert "pip install" in task["setup"] and "cairn-operator-dataflow" in task["setup"]
+    assert task["setup"] == "pip install 'cairndev[dataflow-engine]'"  # ADR-0137 D5: the engine, never a builtin dist
 
 
 # ── submit: envs, the live channel, and the cost gate ───────────────────────

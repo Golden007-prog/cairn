@@ -86,7 +86,7 @@ CAIRN_PACK_PATH=examples/hello-cairn uv run cairn pipeline explain hello-cairn/p
 
 Those are the commands the public CI job runs on every change. The container image is
 built from `Dockerfile.engine`, the Helm chart lives under `deploy/helm/cairn`, and the
-optional extras are `auth`, `dev`, `hello`, `infisical`, `kernel`, `metaflow`, `nats`, `oauth`, `optuna`, `pii`, `rag`, `rag-pgvector`, `rag-pinecone`, `rag-qdrant`, `rag-sqlite-vec`, `runtime-dbos`, `runtime-postgres`, `runtime-sqlite`, `runtime-temporal`, `skypilot`, `ssh`, `storage-postgres`, `telemetry`, `train`.
+optional extras are `auth`, `dataflow-engine`, `dev`, `hello`, `infisical`, `kernel`, `metaflow`, `nats`, `oauth`, `optuna`, `pii`, `rag`, `rag-pgvector`, `rag-pinecone`, `rag-qdrant`, `rag-sqlite-vec`, `rerank-cohere`, `rerank-cross-encoder`, `runtime-dbos`, `runtime-postgres`, `runtime-sqlite`, `runtime-temporal`, `skypilot`, `ssh`, `storage-postgres`, `telemetry`, `train`.
 Full setup: [Installation](https://docs.cairndev.sh/installation/) ·
 [CLI reference](https://docs.cairndev.sh/reference/cli/).
 

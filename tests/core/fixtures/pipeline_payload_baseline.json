@@ -4336,7 +4336,7 @@
   "visibility": "public"
  },
  "training/retrain-cycle": {
-  "content_hash": "sha256:eb30034743f5d7f0",
+  "content_hash": "sha256:4d4457ac7bc3afe1",
   "description": "A bounded retrain cycle: take a window of fresh governed signal, mix prior-cycle rows back in, continue the previous cycle's adapter, measure the new adapter against the one it would replace on the same harness, gate on both the improvement AND the absence of forgetting, and promote only through a human decision. Cycle N+1 continues from cycle N's adapter.\n",
   "governance": {
    "approvers": "ml-leads",
@@ -4555,7 +4555,7 @@
     "default": [
      "mlflow"
     ],
-    "description": "Experiment-tracking sinks. An input, not an inline list, for the str() reason spelled out under `delta_thresholds`.",
+    "description": "Experiment-tracking sinks. An input, not an inline list, so it stays steerable per run.",
     "type": "list"
    },
    "save_steps": {

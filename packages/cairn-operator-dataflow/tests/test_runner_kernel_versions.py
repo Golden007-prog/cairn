@@ -4,7 +4,7 @@ entry point. Evidence beside the stage's own stats; the control plane folds it
 into the version's check map."""
 from __future__ import annotations
 
-from importlib.metadata import version
+from importlib.metadata import entry_points
 from pathlib import Path
 
 import pytest
@@ -14,15 +14,23 @@ from cairn.core.dataflow.runner import run_dataflow
 from cairn.core.dataflow.stage_loader import stage_versions
 
 
+def _noop_dist_version() -> str:
+    """The version of whichever distribution registers `noop`: cairn-operator-dataflow in the
+    monorepo, `cairndev` in the public wheel (ADR-0137 D2). Never a hard-coded name (D5)."""
+    (ep,) = [e for e in entry_points(group="cairn.dataflow_stages") if e.name == "noop"]
+    assert ep.dist.name in {"cairn-operator-dataflow", "cairndev"}, ep.dist.name  # an independent oracle
+    return ep.dist.version
+
+
 def test_every_registered_kernel_has_a_distribution_version():
     versions = stage_versions()
-    assert versions["noop"] == version("cairn-operator-dataflow")
+    assert versions["noop"] == _noop_dist_version()
     assert "ingest.normalize" in versions          # the dataset-checks kernels register their own distribution
 
 
 def test_the_runner_stamps_the_kernel_version_on_each_stage(tmp_path: Path):
     res = run_dataflow(DataflowSpec(stages=[StageRef(stage="noop")]), tmp_path)
-    assert res.stats["noop.kernel_version"] == version("cairn-operator-dataflow")
+    assert res.stats["noop.kernel_version"] == _noop_dist_version()
 
 
 def test_a_resumed_stage_reports_the_version_that_produced_it(tmp_path: Path, monkeypatch):
@@ -33,7 +41,7 @@ def test_a_resumed_stage_reports_the_version_that_produced_it(tmp_path: Path, mo
     import cairn.core.dataflow.runner as runner_mod
     monkeypatch.setattr(runner_mod, "stage_versions", lambda: {"noop": "99.0.0"})   # an "upgrade"
     res = run_dataflow(spec, tmp_path)                             # resumes from the marker
-    assert res.stats["noop.kernel_version"] == version("cairn-operator-dataflow")
+    assert res.stats["noop.kernel_version"] == _noop_dist_version()
 
 
 def test_kernels_from_the_flow_stages_group_get_a_version_too():

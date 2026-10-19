@@ -81,8 +81,8 @@ def authed_client(cfg: InfisicalConfig) -> Any:
         )
     except ImportError as exc:  # pragma: no cover — exercised only without the SDK
         raise RuntimeError(
-            "cairn-operator-secrets-infisical requires the Infisical SDK; install the "
-            'extra — `pip install "cairn-operator-secrets-infisical[infisical]"`.'
+            "the Infisical secrets backend requires the Infisical SDK; install the "
+            'extra — `pip install "cairndev[infisical]"`.'
         ) from exc
 
     client = InfisicalSDKClient(host=cfg.host)

@@ -33,7 +33,7 @@ Unbound → `NullSecretStore` (reads raise). Swapping `secrets/env` →
 The Infisical SDK is an optional extra (the base pack imports without it):
 
 ```bash
-pip install "cairn-operator-secrets-infisical[infisical]"
+pip install "cairndev[infisical]"
 ```
 
 ## Configuration (env)
