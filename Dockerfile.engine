@@ -158,6 +158,9 @@ COPY src ./src
 # #2421 — packages/cairn-platform: same rule; its `cairn.routers` providers mount the
 # capture, datasets and judges routers.
 COPY packages ./packages
+# The example pack is a workspace member too (examples/hello-cairn, #2678): same rule. Without
+# it the v0.1.0 public image failed ("Distribution not found at: file:///app/examples/hello-cairn").
+COPY examples/hello-cairn ./examples/hello-cairn
 # #1190 (ADR-0085 D3): the console SOURCE lives at top-level console/; the wheel
 # still ships the built SPA at cairn/web/dist (deployed layout unchanged), so a
 # prebuilt console/dist is STAGED there before the install. Building without a
