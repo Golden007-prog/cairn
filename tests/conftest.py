@@ -28,6 +28,10 @@ import os
 import pytest
 
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy")
+# typer forces a rich terminal (ANSI codes, boxed panels) when GITHUB_ACTIONS, FORCE_COLOR or
+# PY_COLORS is set, read once when typer.rich_utils is imported. Tests that read `--help`
+# output must see plain text on every runner, so switch the forcing off before typer loads.
+os.environ.setdefault("_TYPER_FORCE_DISABLE_TERMINAL", "1")
 
 # #1199 — the repo .env must not steer the suite. Two leak paths existed:
 # (a) THIRD-PARTY pytest plugins (deepeval/langsmith) import before this
