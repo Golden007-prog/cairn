@@ -1,67 +1,81 @@
+/*
+ * cairn docs — Starlight theme aligned with the landing page (cairndev.sh).
+ * Landing palette: ink #16382f · green #234d3c · lime #d9f687 · paper #f7f8f2.
+ */
+
 :root {
-  --sl-content-width: 64rem;
-  --sl-text-5xl: 3.6rem;
-  /* Brand accent — emerald, to match the marketing landing page. */
-  --sl-color-accent-low: #032420;
-  --sl-color-accent: #10b981;
-  --sl-color-accent-high: #a7f3d0;
+  /* Dark theme (Starlight's default block). Links read as lime on the dark
+     background; accent surfaces are a deep green. */
+  --sl-color-accent-low: #1f3a2f;
+  --sl-color-accent: #8cc56a;
+  --sl-color-accent-high: #d9f687;
+
+  --cairn-ink: #16382f;
+  --cairn-green: #234d3c;
+  --cairn-lime: #d9f687;
+  --cairn-paper: #f7f8f2;
+  --cairn-line: #d9dfd5;
 }
+
 :root[data-theme='light'] {
-  --sl-color-accent-low: #d1fae5;
-  --sl-color-accent: #059669;
-  --sl-color-accent-high: #064e3b;
+  --sl-color-accent-low: #e4f0c4;
+  --sl-color-accent: #234d3c;
+  --sl-color-accent-high: #16382f;
+  --sl-color-bg: var(--cairn-paper);
+  --sl-color-bg-nav: var(--cairn-paper);
+  --sl-color-bg-sidebar: var(--cairn-paper);
+  --sl-color-hairline-light: var(--cairn-line);
+  --sl-color-hairline: var(--cairn-line);
 }
 
-.card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 1rem;
+/* ── Header brand: the landing's mark + an 800-weight wordmark ─────────── */
+.site-title {
+  gap: 0.6rem;
+  font-size: 1.6rem;
+  font-weight: 800;
+  letter-spacing: -0.06em;
+  color: var(--sl-color-white);
+}
+:root[data-theme='light'] .site-title { color: var(--cairn-ink); }
+.site-title img {
+  height: 1.7rem;
+  width: auto;
 }
 
-.card {
-  border: 1px solid var(--sl-color-gray-5);
-  border-radius: 0.75rem;
-  padding: 1rem;
-  background: var(--sl-color-bg-nav);
-}
-
-.sl-markdown-content table { font-size: 0.95rem; }
-
-/* ── Mermaid diagrams: full-width responsive, dark-mode friendly ─── */
-
-.sl-markdown-content svg[id^="mermaid"],
-.sl-markdown-content .mermaid svg,
-.sl-markdown-content svg[aria-roledescription] {
-  width: 100% !important;
-  max-width: 100% !important;
-  height: auto !important;
+/* ── Mermaid diagrams ──────────────────────────────────────────────────
+ * Diagrams render with Mermaid's `base` theme in the landing palette and sit
+ * on a paper card in BOTH site themes, so labels are always dark-on-light.
+ * On narrow screens the card scrolls sideways; the page never does. */
+.sl-markdown-content pre.mermaid,
+.sl-markdown-content pre.mermaid[data-processed] {
   display: block;
-  margin: 1.5rem auto;
-  background: #ffffff;
-  border: 1px solid var(--sl-color-gray-5);
-  border-radius: 0.75rem;
+  margin: 1.5rem 0;
   padding: 1rem;
-  min-height: 280px;
-  cursor: zoom-in;
+  background: var(--cairn-paper) !important;
+  border: 1px solid var(--cairn-line);
+  border-radius: 0.75rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+  min-height: 0;
+}
+:root[data-theme='dark'] .sl-markdown-content pre.mermaid {
+  border-color: #3a4a42;
+}
+.sl-markdown-content pre.mermaid svg {
+  display: inline-block;
+  height: auto;
+  max-width: 100%;
+}
+@media (max-width: 50rem) {
+  .sl-markdown-content pre.mermaid svg {
+    /* keep labels legible: scroll inside the card instead of shrinking */
+    max-width: none !important;
+  }
 }
 
-:root[data-theme="dark"] .sl-markdown-content svg[id^="mermaid"],
-:root[data-theme="dark"] .sl-markdown-content svg[aria-roledescription] {
-  background: #f8fafc;
-  border-color: #334155;
-}
+/* ── Small helpers ─────────────────────────────────────────────────────── */
+.sl-markdown-content table { font-size: 0.92rem; }
 
-.sl-markdown-content svg[id^="mermaid"] text,
-.sl-markdown-content svg[aria-roledescription] text {
-  font-size: 15px !important;
-}
-
-.medium-zoom-overlay {
-  background: rgba(15, 23, 42, 0.9) !important;
-  z-index: 9998;
-}
-
-.medium-zoom-image--opened {
-  z-index: 9999;
-  cursor: zoom-out;
-}
+.medium-zoom-overlay { z-index: 9998; }
+.medium-zoom-image--opened { z-index: 9999; }

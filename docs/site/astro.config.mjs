@@ -3,43 +3,120 @@ import starlight from '@astrojs/starlight';
 import starlightImageZoom from 'starlight-image-zoom';
 import astroMermaid from 'astro-mermaid';
 
-// The user docs, served at https://docs.cairndev.sh. The site lives in the
-// public repository as docs/site (ADR-0121 D4): a docs fix and the code change
-// it describes land in one pull request.
+// The user docs, served at https://docs.cairndev.sh: its own Vercel project
+// with root directory docs/site. The site lives in the public repository
+// (ADR-0121 D4), so a docs fix and the code change it describes land in one
+// pull request. The marketing landing is a separate deployment at cairndev.sh.
 //
-// Content lives at src/content/docs/ and maps 1:1 to routes at the domain
-// root (/installation/, /features/pipelines/, ...).
-//
-// Docs editorial rule: document ONLY features already built and verified in
-// this repository — no roadmap, no "coming soon". A feature that is part of
+// Docs editorial rule: document ONLY what is built and verified in this
+// repository — no roadmap, no "coming soon". Every command and YAML snippet is
+// checked against the engine before it lands here. A feature that is part of
 // cairn-platform is named only to say so.
+
+// Old slugs → the closest page in the current set. Every page that existed
+// before the 2026-10 rewrite resolves to something.
+const redirects = {
+  '/architecture': '/',
+  '/ask': '/',
+  '/sdk': '/',
+  '/concepts/operators': '/concepts/capabilities/',
+  '/concepts/profiles-environment': '/concepts/capabilities/',
+  '/concepts/packs': '/guides/write-a-pipeline/',
+  '/concepts/runs-provenance': '/concepts/runs/',
+  '/configuration': '/install/',
+  '/database': '/install/',
+  '/deployment': '/install/',
+  '/installation': '/install/',
+  '/runtimes': '/install/',
+  '/services': '/install/',
+  '/console': '/quickstart/',
+  '/governance': '/concepts/gates/',
+  '/modelops': '/reference/catalog/',
+  '/pipelines': '/concepts/pipelines/',
+  '/triggers': '/concepts/pipelines/',
+  '/reference/http-api': '/reference/cli/',
+  // The feature and combination-guide pages of the site before the rewrite.
+  '/features': '/',
+  '/features/pipelines': '/concepts/pipelines/',
+  '/features/gates': '/concepts/gates/',
+  '/features/dataflow-and-artifacts': '/concepts/flows/',
+  '/features/governance': '/concepts/gates/',
+  '/features/triggers-and-events': '/concepts/pipelines/',
+  '/features/models-and-agents': '/concepts/flows/',
+  '/features/monitor-and-hooks': '/reference/operators/',
+  '/features/training': '/reference/catalog/',
+  '/features/remote-and-secrets': '/guides/connect-a-provider/',
+  '/features/backends': '/install/',
+  '/features/recovery': '/concepts/runs/',
+  '/features/workers': '/reference/cli/',
+  '/guides/data-to-assistant': '/reference/catalog/',
+  '/guides/nightly-ops': '/reference/catalog/',
+  '/guides/governed-finetune': '/reference/catalog/',
+  '/guides/recovery': '/concepts/runs/',
+};
+
 export default defineConfig({
   site: 'https://docs.cairndev.sh',
-  // Pages folded into the feature pages (#2668) keep their old URLs working.
-  redirects: {
-    '/pipelines': '/features/pipelines/',
-    '/governance': '/features/governance/',
-    '/triggers': '/features/triggers-and-events/',
-    '/runtimes': '/features/backends/',
-    '/database': '/features/backends/',
-    '/services': '/features/models-and-agents/',
-    '/modelops': '/features/training/',
-    '/ask': '/',
-    '/console': '/',
-  },
+  redirects,
   markdown: {
     shikiConfig: {
       excludeLangs: ['mermaid'],
     },
   },
   integrations: [
-    astroMermaid(),
+    astroMermaid({
+      // One palette in both site themes: diagrams sit on a paper card
+      // (see custom.css), so labels are dark-on-light everywhere.
+      theme: 'base',
+      autoTheme: false,
+      enableLog: false,
+      mermaidConfig: {
+        fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
+        flowchart: { useMaxWidth: false, curve: 'basis', padding: 12, nodeSpacing: 36, rankSpacing: 40 },
+        sequence: { useMaxWidth: false },
+        themeVariables: {
+          fontSize: '15px',
+          background: '#f7f8f2',
+          primaryColor: '#ffffff',
+          primaryTextColor: '#16382f',
+          primaryBorderColor: '#234d3c',
+          secondaryColor: '#d9f687',
+          secondaryTextColor: '#16382f',
+          secondaryBorderColor: '#234d3c',
+          tertiaryColor: '#eef1e6',
+          tertiaryTextColor: '#16382f',
+          tertiaryBorderColor: '#9fb09a',
+          lineColor: '#566a61',
+          textColor: '#16382f',
+          mainBkg: '#ffffff',
+          nodeBorder: '#234d3c',
+          clusterBkg: '#eef1e6',
+          clusterBorder: '#9fb09a',
+          titleColor: '#16382f',
+          edgeLabelBackground: '#f7f8f2',
+          actorBkg: '#ffffff',
+          actorBorder: '#234d3c',
+          actorTextColor: '#16382f',
+          signalColor: '#16382f',
+          signalTextColor: '#16382f',
+          noteBkgColor: '#d9f687',
+          noteTextColor: '#16382f',
+          noteBorderColor: '#234d3c',
+        },
+      },
+    }),
     starlight({
       plugins: [starlightImageZoom()],
       title: 'cairn',
-      logo: { src: './src/assets/logo.svg' },
+      logo: {
+        light: './src/assets/logo-light.svg',
+        dark: './src/assets/logo-dark.svg',
+        alt: '',
+        replacesTitle: false,
+      },
+      favicon: '/favicon.svg',
       description:
-        'A self-hosted engine for governed pipelines — data, agents, models and operations behind gates, budgets and an audit trail.',
+        'cairn is a self-hosted control plane for the work behind AI models: it decides when each step may run, holds spend to a budget, pauses for data checks and people, and records what happened.',
       customCss: ['./src/styles/custom.css'],
       social: [
         {
@@ -48,67 +125,45 @@ export default defineConfig({
           href: 'https://github.com/cairndev-sh/cairn',
         },
       ],
-      // Sidebar lists only pages that exist and are truthful.
       sidebar: [
         // Cross-link to the marketing landing — a separate deployment.
         { label: '← Home', link: 'https://cairndev.sh', attrs: { target: '_self' } },
         {
           label: 'Start',
           items: [
-            { label: 'Overview', slug: '' },
-            { label: 'Installation', slug: 'installation' },
+            { label: 'What is cairn', slug: '' },
             { label: 'Quickstart', slug: 'quickstart' },
-            { label: 'Architecture', slug: 'architecture' },
+            { label: 'Install and deploy', slug: 'install' },
           ],
         },
         {
           label: 'Concepts',
           items: [
-            { label: 'Packs', slug: 'concepts/packs' },
-            { label: 'Operators', slug: 'concepts/operators' },
-            { label: 'Profiles', slug: 'concepts/profiles-environment' },
-            { label: 'Runs & provenance', slug: 'concepts/runs-provenance' },
-            { label: 'Configuration', slug: 'configuration' },
-          ],
-        },
-        {
-          label: 'Features',
-          items: [
-            { label: 'All features (proof status)', slug: 'features' },
-            { label: 'Pipelines', slug: 'features/pipelines' },
-            { label: 'Gates', slug: 'features/gates' },
-            { label: 'Dataflow & artifacts', slug: 'features/dataflow-and-artifacts' },
-            { label: 'Governance', slug: 'features/governance' },
-            { label: 'Triggers & events', slug: 'features/triggers-and-events' },
-            { label: 'Models & agents', slug: 'features/models-and-agents' },
-            { label: 'Monitor & run hooks', slug: 'features/monitor-and-hooks' },
-            { label: 'Training', slug: 'features/training' },
-            { label: 'Remote execution & secrets', slug: 'features/remote-and-secrets' },
-            { label: 'Backends', slug: 'features/backends' },
-            { label: 'Recovery', slug: 'features/recovery' },
-            { label: 'Workers', slug: 'features/workers' },
+            { label: 'Pipelines, legs and steps', slug: 'concepts/pipelines' },
+            { label: 'Flows', slug: 'concepts/flows' },
+            { label: 'Capabilities and environments', slug: 'concepts/capabilities' },
+            { label: 'Gates and approvals', slug: 'concepts/gates' },
+            { label: 'Cost and budgets', slug: 'concepts/cost' },
+            { label: 'Runs and the record', slug: 'concepts/runs' },
           ],
         },
         {
           label: 'Guides',
           items: [
-            { label: 'Checked data to an assistant', slug: 'guides/data-to-assistant' },
-            { label: 'A nightly job', slug: 'guides/nightly-ops' },
-            { label: 'A governed fine-tune', slug: 'guides/governed-finetune' },
-            { label: 'Surviving a crash', slug: 'guides/recovery' },
-          ],
-        },
-        {
-          label: 'Operate',
-          items: [
-            { label: 'Deployment', slug: 'deployment' },
+            { label: 'Run your first pipeline', slug: 'guides/first-pipeline' },
+            { label: 'Write a pipeline', slug: 'guides/write-a-pipeline' },
+            { label: 'Write a flow', slug: 'guides/write-a-flow' },
+            { label: 'Connect a provider', slug: 'guides/connect-a-provider' },
+            { label: 'Set up your team', slug: 'guides/team' },
           ],
         },
         {
           label: 'Reference',
           items: [
             { label: 'CLI', slug: 'reference/cli' },
-            { label: 'Builtin operators', slug: 'reference/operators' },
+            { label: 'Pipeline and flow YAML', slug: 'reference/yaml' },
+            { label: 'Operators', slug: 'reference/operators' },
+            { label: 'Pipeline catalog', slug: 'reference/catalog' },
           ],
         },
       ],

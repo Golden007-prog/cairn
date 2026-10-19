@@ -1,212 +1,133 @@
 ---
-title: CLI reference
-description: The cairn command surface — inspect, launch and drive pipelines, decide gates, manage connections and workers.
+title: CLI
+description: The cairn commands you use day to day — run cairn locally, inspect and launch pipelines, develop a flow, connect providers, read the record, and deploy.
 ---
 
-The `cairn` CLI is the control client. Run it from an installed wheel
-(`cairn …`) or a checkout (`uv run cairn …`). `cairn --help` and
-`cairn <command> --help` list every flag.
+The `cairn` command is installed with cairn. This page covers the commands for
+everyday work, with the options the code defines. Every command takes
+`--help` for its full option list.
 
-| Group | Commands |
+Commands that touch the engine's data read the same settings as the server, so
+set them first when you run outside `cairn dev`:
+
+| Variable | What it selects |
 |---|---|
-| Inspect & verify | `doctor` · `ls` · `validate` · `pack` · `config` · `flow` |
-| Pipelines | `pipeline` · `remote` |
-| Run locally | `run` · `preflight` · `gate` · `replay` · `lineage` · `test` · `visualize` · `export` |
-| Author | `init` · `lock` |
-| Operate | `dev` · `worker` · `connect` · `compute` · `deploy` · `demo` |
+| `CAIRN_STORAGE` | the database, for example `sqlite:///$HOME/.cairn/cairn.db` or a `postgres://` URL |
+| `CAIRN_PROFILE` | the deployment profile (which operator serves each capability) |
+| `CAIRN_PACK_PATH` | directories of packs that aren't installed as packages, separated by `:` |
 
-## Inspect & verify
+## Run cairn locally
 
-### `doctor`
-
-Health check: packs load, profile bindings resolve to registered operators,
-settings and their resolved values, service reachability, run-hook providers
-that failed to load. `--strict` treats warnings as failures.
-
-### `ls [PACK]`
-
-List packs and what they contribute. `--json` for a machine-readable shape.
-
-### `validate PATHS...`
-
-Offline validation of a pack's pipelines, flows, templates and policies: no
-model calls, no backend. A capability with no binding fails, so validate under
-the profile you will run with:
-
-```bash
-CAIRN_PROFILE=examples/hello-cairn/profiles/hello.toml cairn validate examples/hello-cairn
-```
-
-### `pack`
-
-| Subcommand | Effect |
+| Command | What it does |
 |---|---|
-| `pack schema <ref>` | the UI contract for a template: inputs, outputs, plan, steps |
-| `pack check` | fail on manifest ↔ code drift in operator packs |
-| `pack add` | make a scaffolded pack discoverable by the engine (wires it into the workspace's `pyproject.toml`) |
-| `pack sync [dir]` | regenerate an operator pack's `pack.toml` tables and entry points from its classes; `--check` reports drift |
-
-### `config workflow <template-ref>`
-
-The composed config surface of a template: every reachable operator's knobs,
-**governance** vs **operational**. `--json` for the raw shape. See
-[Configuration](/configuration/).
-
-### `flow`
-
-| Subcommand | Effect |
-|---|---|
-| `flow ls` | list flows |
-| `flow split <ref>` | show how a flow splits at in-flow approval gates |
-| `flow export <ref> --to <target>` | render a flow for another engine |
+| `cairn dev --engine-only` | Starts the engine on SQLite with the in-process runtime and sign-in as `dev`/`dev`. `--port` sets the port (default 8000), `--db` the SQLite file (default `~/.cairn/dev.db`), `--seed` loads demo records first. Without `--engine-only` it also starts the console's dev server, which is part of cairn-platform. |
+| `cairn demo` | Seeds a demo workspace (default `demo`; `-w` to choose). `--archive` removes the demo workspace again, keeping its runs and audit entries. |
+| `cairn doctor` | Checks the environment configuration and whether configured services are reachable. `--strict` fails on warnings. |
+| `cairn ls` | Lists the installed packs and what each contributes; `cairn ls operators` prints the operator map. |
 
 ## Pipelines
 
-### `pipeline`
-
-| Subcommand | Effect |
+| Command | What it does |
 |---|---|
-| `pipeline ls` | the installed pipelines |
-| `pipeline show <ref>` | a pipeline's legs, gates and wires, and which runtime runs each leg; `--plan` for the execution plan |
-| `pipeline explain <ref>` | per leg: the resolved operator or flow file, the engine, every gate and the authority demanding it, each config value and its layer, timeouts and retries. `-e <environment>`, `-i key=value`, `--json` |
-| `pipeline run <ref>` | launch through the start door and drive it from this process; `-i key=value`, `-e <environment>`, `--detach` |
+| `cairn pipeline ls` | Lists every installed pipeline with its legs and content hash, internal ones included. |
+| `cairn pipeline show <ref>` | A pipeline's inputs, legs, gates and wiring. `--plan` shows the execution plan instead. |
+| `cairn pipeline explain <ref>` | What will happen before anything spends: each input and where its value comes from, each leg and what triggers it, the gates and the budget. `-i key=value` shows the effect of a launch input, `-e` resolves for an environment, `--json` prints the raw result. |
+| `cairn pipeline run <ref>` | Launches a pipeline and follows it to the end. `-i key=value` (repeatable; values are parsed as JSON when possible), `-e` the environment, `--detach` returns at once. |
 
-```bash
-cairn pipeline explain hello-cairn/profile-and-publish -e sandbox
-cairn pipeline run hello-cairn/profile-and-publish -e sandbox
-```
+A **ref** is `<pack>/<name>`, for example `hello-cairn/profile-and-publish`.
+When a flow has the same name as a pipeline, `show` and `explain` refuse the
+bare name: write `pipeline:<pack>/<name>`. `run` accepts the bare name and
+runs the pipeline.
 
-Under the in-process runtime the CLI process owns the pipeline only while it
-lives; `--detach` leaves it unowned (exit 2).
+Only declared pipelines run. A ref that names a flow, not a pipeline, is
+refused: a flow runs as a leg of a pipeline.
 
-### `remote`
+`cairn pipeline run` exits with:
 
-Drives a running server over its HTTP API.
-
-```bash
-cairn remote login -u dev -p dev -e http://localhost:8471     # store a token
-cairn remote launch <ref> --environment sandbox --watch        # launch a pipeline
-cairn remote pipelines                                          # list pipelines
-cairn remote pipeline <pipeline_id>                             # one pipeline's steps
-cairn remote findings <pipeline_id>                             # what its legs produced
-cairn remote advance <pipeline_id> <step>                       # decide a gate / release a step
-cairn remote cancel-pipeline <pipeline_id>
-```
-
-`launch` flags: `-i key=value` (repeatable), `--preset` / `--save-preset`,
-`--environment`, `--watch`, `--interval`. `advance` takes `--approver` (recorded
-when auth is off; under auth the server records the signed-in identity).
-`cairn remote presets <ref>` and `cairn remote delete-preset` manage input
-presets.
-
-Runs: `remote submit`, `remote ps`, `remote watch`, `remote status <run_id>`,
-`remote logs -f <run_id>`, `remote cancel <run_id>`, `remote approve` /
-`remote reject <run_id>`. `remote hash-password` prints a password hash (the
-`auth` extra). Every `remote` command takes `--endpoint` / `-e`, `--token` and
-`--profile`.
-
-## Run locally
-
-### `run`
-
-Fires a trigger file, or with `--input` runs a template directly, in this
-process. The dev loop flags `--dry-run` (compile and show the plan),
-`--mock` (operators that support it take their mock path) and
-`-I, --interactive` (answer gates in the terminal) write no pipeline record.
-
-### `preflight <template-ref>`
-
-The side-effect-free ready/blocked verdict for a template: blockers, gates,
-cost, resolved config. Exit 0 = ready, 1 = blocked. A pipeline is checked with
-`cairn pipeline explain`.
-
-### `gate <template-ref>`
-
-Run a check workflow read-only and exit non-zero on its verdict: the CI entry
-point. `--input`, `--set k=v`, `--profile`, `--fail-on fail|warn`, `--json`,
-`--mock`.
-
-### `replay <run_id>`
-
-Render a run's persisted event trace as a timeline. `--json` for the raw
-record; `--source auto|file|db`.
-
-### `lineage [SUBJECT]`
-
-Reads lineage records from the audit log and verifies the hash chain as it
-reads. The operator that writes lineage records is part of cairn-platform; on
-this install the command says so and points at `cairn replay`.
-
-### `test [PACK_PATH]`
-
-Run a pack's pytest suite; arguments after `--` pass through.
-
-### `visualize template <ref>`
-
-Render a template's compiled graph as Mermaid (`-o <file>`).
-
-### `export <workflow>`
-
-Render an installed workflow as one runnable pipeline file.
-
-## Author
-
-### `init`
-
-| Subcommand | Creates |
+| Code | Meaning |
 |---|---|
-| `init pack` | a new pack |
-| `init template` | a template stub |
-| `init skill` | a skill stub |
-| `init policy` | a policy stub |
-| `init operator <name> [--op group/name]` | an operator pack: a wheel bundling one or more operators |
+| `0` | the pipeline completed |
+| `1` | it failed or was cancelled, or the ref is unknown, ambiguous or missing required inputs |
+| `2` | the ref names a flow, not a pipeline; or `--detach` under the in-process runtime, which would leave nothing driving the pipeline |
+| `3` | refused before it started: a policy denied the launch, or admission refused it |
+| `130` | interrupted with Ctrl-C |
 
-### `lock`
+## Flows
 
-Pin the shipped pack closure by content hash into `cairn.lock`;
-`cairn lock --check` fails when it is missing or stale (a CI gate).
-
-## Operate
-
-### `dev`
-
-One-command SQLite dev environment: the engine on a pinned configuration
-(`~/.cairn/dev.db`, the in-process runtime and bus, auth on with `dev`/`dev`).
-`--engine-only`, `--port` (default 8000), `--db <path>`, `--seed` (seed demo
-records first).
-
-### `worker`
-
-`cairn worker --pull` claims jobs from the control plane over HTTP (see
-[Workers](/features/workers/)); without `--pull` it runs a Temporal worker
-(`--remote`, `--dataset`, `--task-queue`).
-
-### `connect`
-
-Typed connections (model APIs, compute, MCP servers). Secret values live in a
-secret store; a connection holds references only.
-
-| Subcommand | Effect |
+| Command | What it does |
 |---|---|
-| `connect add <provider>` | add a connection: `--name`, `--set k=v`, `--secret KEY=REF`; `--preset <name>` for an MCP preset; `--via oauth` for a broker |
-| `connect presets` | the MCP connection presets (GitHub, Slack, Notion) |
-| `connect providers` | the provider catalog |
-| `connect ls` | configured connections (names, kinds, secret keys; never values) |
-| `connect test <name>` | resolve the secret refs and run the provider's authenticated health probe |
-| `connect authorize <name>` | restart the OAuth flow of an OAuth connection |
-| `connect rm <name>` | delete a connection (never the secret value) |
+| `cairn flow ls` | Lists every flow, of all three kinds. |
+| `cairn flow split <ref>` | Shows where a flow splits at its approval points. `--json` for the raw segments. |
+| `cairn validate <paths>` | Validates a pack's pipeline, flow, template, skill and policy files offline: no model calls, nothing runs. A capability with no binding fails, so validate under the profile you will run with. `--strict` fails on warnings. |
 
-### `compute`
+### Try a flow without a record
 
-`compute status [connection]` and `compute sweep` (stop instances whose lease
-expired; report-only without `--apply`).
+`cairn run <pack>/<template> --input <inputs.json>` runs an agentic flow on its
+own, in process, for development. It writes no run record and is not a
+governed pipeline.
 
-### `deploy doctor`
+| Option | Effect |
+|---|---|
+| `--dry-run` | compile, validate and print the execution plan; runs nothing |
+| `--mock` | operators that support it return mock results; no side effects |
+| `--mode sandbox` | write operations are stubbed, reads run for real, spend stays near zero |
+| `--interactive` / `-I` | at each approval point, approve or reject in the terminal |
 
-Check that a deployment `.env` and the enabled compose profiles agree:
-`--env <file>`, `--profile <name>` (repeatable), `--strict`.
+## Authoring
 
-### `demo`
+| Command | What it does |
+|---|---|
+| `cairn init pack <name>` | Scaffolds a pack: `pack.toml`, `pyproject.toml`, `pipelines/`, `flows/`, `policies/`. |
+| `cairn init operator <name>` | Scaffolds an operator pack: a package bundling one or more operators. |
+| `cairn init template` · `skill` · `policy` | Adds one stub to the current pack. |
+| `cairn test [pack]` | Runs a pack's tests with pytest. |
 
-Seed demo records into a workspace (`-w`, default `demo`); `--archive`
-tears it down (a soft delete).
+## Connections
+
+| Command | What it does |
+|---|---|
+| `cairn connect providers` | Lists the providers you can connect: model APIs, compute, MCP servers. |
+| `cairn connect add <provider>` | Adds a connection. `--name` names it, `--secret KEY=ENV_REF` points a secret at an environment variable, `--set key=value` overrides config. Secrets are stored as references, never as values. |
+| `cairn connect test <name>` | Resolves the connection's secrets and runs the provider's authenticated health check. Exit 0 when it connects. |
+| `cairn connect ls` | Lists connections: names, kinds and secret keys, never values. |
+| `cairn connect rm <name>` | Deletes a connection, leaving the secret itself untouched. |
+
+## The record
+
+| Command | What it does |
+|---|---|
+| `cairn replay <run-id>` | Replays a past run's recorded event trace as a timeline. `--json` for the raw events. |
+| `cairn lineage [subject]` | Shows provenance records from the audit log, matched on a subject such as a model name, and checks the hash chain as it reads. Omit the subject to list them all. The operator that writes lineage records is part of cairn-platform. |
+
+## A remote server
+
+Drive a deployed cairn from your terminal. Log in once; the token is stored in
+your profile.
+
+| Command | What it does |
+|---|---|
+| `cairn remote login -e <url>` | Signs in and stores the token. |
+| `cairn remote pipelines` | Lists the pipelines on the server. |
+| `cairn remote launch <ref>` | Launches a pipeline. `-i key=value`, `--preset` to start from a saved input set, `--watch` to follow it. |
+| `cairn remote pipeline <id>` | One pipeline's full record: its plan and the state of every step. |
+| `cairn remote advance <id> <step>` | Approves a step waiting on a person: a gate, or a leg whose operator or policy asks for approval. Under sign-in the server records your identity. |
+| `cairn remote findings <id>` | A run's findings, or every step's findings for a pipeline. |
+| `cairn remote cancel-pipeline <id>` | Cancels a pipeline and its running legs. |
+| `cairn remote ps` / `status` / `logs` | Lists runs, shows one run, prints or follows its event log. |
+| `cairn remote approve` / `reject` | Decides a run paused at an approval inside a flow. |
+
+Every `remote` command takes `--endpoint` / `-e`, `--token` and `--profile`.
+
+## Deploy and workers
+
+| Command | What it does |
+|---|---|
+| `cairn deploy doctor` | Checks a deployment's `.env` (`--env`) or Helm values (`--values`) before it starts: required values, and that the runtime matches the enabled services. `--strict` fails on warnings. |
+| `cairn remote hash-password` | Prints the password hash for `CAIRN_API_PASSWORD_HASH` (the `auth` extra). |
+| `cairn worker --pull` | Runs a worker that claims jobs from the control plane over HTTP: `--engine-url`, `--token`, `-c gpu=T4` to say what the machine offers, `--once` for a single job. Without `--pull` it polls a Temporal task queue. |
+
+## Next
+
+- [Pipeline and flow YAML](/reference/yaml/)
+- [Pipeline catalog](/reference/catalog/)
+- [Install and deploy](/install/)
