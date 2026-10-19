@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contract://dataflow.run.output/1.0.0",
+  "description": "Scalar stats + registered artifact ids \u2014 what lands in findings. Rows\nnever appear here (contract-enforced upstream).",
+  "properties": {
+    "stats": {"additionalProperties": true, "title": "Stats", "type": "object"},
+    "artifact_ids": {"items": {"type": "string"}, "title": "Artifact Ids", "type": "array"},
+    "artifact_uris": {"items": {"type": "string"}, "title": "Artifact Uris", "type": "array"},
+    "engine": {"default": "", "title": "Engine", "type": "string"},
+    "cost_usd": {"default": 0.0, "title": "Cost Usd", "type": "number"},
+    "warnings": {"items": {"type": "string"}, "title": "Warnings", "type": "array"},
+    "summary": {"default": "", "title": "Summary", "type": "string"}
+  },
+  "title": "DataflowRunOutput",
+  "type": "object"
+}

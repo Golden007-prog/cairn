@@ -1,0 +1,47 @@
+# Shape A — bundled Postgres, DBOS runtime (what prod runs today, on a cluster).
+#
+#   cairn deploy doctor --values deploy/helm/cairn/values-postgres.example.yaml --strict
+#   helm upgrade --install cairn deploy/helm/cairn -f values-postgres.example.yaml
+
+image:
+  repository: ghcr.io/cairndev-sh/cairn-engine
+  tag: v0.1.0            # PIN IT — `latest` fails --strict
+
+runtime: dbos
+checkpointer: postgres
+
+ingress:
+  enabled: true
+  className: nginx
+  host: cairn.example.com
+  certManager:
+    clusterIssuer: letsencrypt-prod
+  tls:
+    enabled: true
+    secretName: cairn-tls
+
+postgres:
+  enabled: true
+  password: CHANGE-ME-openssl-rand-hex-16
+  persistence:
+    size: 20Gi
+
+secrets:
+  obsJwtSecret: CHANGE-ME-openssl-rand-hex-32
+  # `cairn remote hash-password` — no `$$` escaping needed here (YAML, not compose).
+  obsApiPasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$hdL7wUwAlItMM+v3pVfHxA$R1VstcN4/3bgfIjAOEmkCALYtjAqE4bjysDdB7zSit8"
+
+env:
+  profile: /app/.venv/lib/python3.13/site-packages/cairn/profiles/secure.toml   # REQUIRED (#2296)
+  backend: mock
+  apiUser: admin
+  requireAuth: true
+
+# The dbos-postgres tier's artifact store. Point at any S3-compatible endpoint
+# (MinIO in-cluster, or S3 itself with the endpoint left empty).
+artifacts:
+  s3:
+    enabled: true
+    endpoint: http://minio:9000
+    bucket: cairn-artifacts
+    region: us-east-1

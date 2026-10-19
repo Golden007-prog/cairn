@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contract://ml.run.input/1.0.0",
+  "description": "The ml/run binding surface \u2014 mirror of DataflowRunInput with the\nkind-neutral ``flow_ref`` key (the compiler's kind-matched door reads it).",
+  "properties": {
+    "flow_ref": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "default": null,
+      "description": "Pack-addressed kind: ml flow, e.g. 'training/sft-train'.",
+      "title": "Flow Ref"
+    },
+    "stages": {
+      "description": "Inline stage list: [{stage, config?, resources?}].",
+      "items": {"additionalProperties": true, "type": "object"},
+      "title": "Stages",
+      "type": "array"
+    },
+    "input_artifacts": {
+      "description": "Dataset REFERENCES the flow consumes (immutable URI+hash, ADR-0080).",
+      "items": {"type": "string"},
+      "title": "Input Artifacts",
+      "type": "array"
+    },
+    "config": {"additionalProperties": true, "title": "Config", "type": "object"},
+    "budget": {
+      "additionalProperties": true,
+      "description": "{max_cost_usd?, max_rows?, max_seconds?}.",
+      "title": "Budget",
+      "type": "object"
+    },
+    "parent_run": {
+      "default": "",
+      "description": "Run lineage (#989); usually set by --from.",
+      "title": "Parent Run",
+      "type": "string"
+    }
+  },
+  "title": "MlRunInput",
+  "type": "object"
+}

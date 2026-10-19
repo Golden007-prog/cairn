@@ -1,0 +1,73 @@
+{{- if .Values.profiles.nats.enabled }}
+{{/*
+compose `--profile nats` (#115) — the durable trigger inbox. Enabling the
+profile also sets CAIRN_TRIGGER_DURABLE=1 and CAIRN_TRIGGER_INBOX in the ConfigMap,
+so the compose footgun (service up, engine never pointed at it) cannot happen
+here: the two move together.
+*/}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "cairn.fullname" . }}-nats
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  serviceName: {{ include "cairn.fullname" . }}-nats
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "cairn.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: nats
+  template:
+    metadata:
+      labels:
+        {{- include "cairn.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: nats
+    spec:
+      containers:
+        - name: nats
+          image: {{ .Values.profiles.nats.image }}
+          args: ["-js", "-sd", "/data", "-m", "8222"]
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitor
+              containerPort: 8222
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+            periodSeconds: 10
+            failureThreshold: 5
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.profiles.nats.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cairn.fullname" . }}-nats
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  ports:
+    - name: client
+      port: 4222
+      targetPort: client
+    - name: monitor
+      port: 8222
+      targetPort: monitor
+  selector:
+    {{- include "cairn.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+{{- end }}

@@ -1,0 +1,37 @@
+# Shape C — the Temporal runtime: the server submits, a separate worker
+# executes. The runtime and the profile move together; either alone refuses to
+# render (the compose-doctor rule from #390, enforced before anything starts).
+
+image:
+  repository: ghcr.io/cairndev-sh/cairn-engine
+  tag: v0.1.0
+
+runtime: temporal
+checkpointer: postgres     # REQUIRED: a HITL gate must resume across server↔worker
+
+profiles:
+  temporal:
+    enabled: true
+    ui:
+      enabled: true
+
+ingress:
+  enabled: true
+  className: nginx
+  host: cairn.example.com
+  certManager:
+    clusterIssuer: letsencrypt-prod
+
+postgres:
+  enabled: true
+  password: CHANGE-ME-openssl-rand-hex-16
+
+worker:
+  replicaCount: 2
+
+env:
+  profile: /app/.venv/lib/python3.13/site-packages/cairn/profiles/secure.toml   # REQUIRED (#2296)
+
+secrets:
+  obsJwtSecret: CHANGE-ME-openssl-rand-hex-32
+  obsApiPasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$hdL7wUwAlItMM+v3pVfHxA$R1VstcN4/3bgfIjAOEmkCALYtjAqE4bjysDdB7zSit8"

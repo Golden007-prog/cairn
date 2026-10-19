@@ -1,0 +1,112 @@
+{{- if .Values.profiles.temporal.enabled }}
+{{/*
+compose `--profile temporal`. Temporal's auto-setup image against the app
+Postgres, exactly as compose does (give it its own database with the official
+temporal chart when scale demands — profiles.dedicated-temporal-db is
+deliberately not implemented here).
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cairn.fullname" . }}-temporal
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "cairn.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: temporal
+  template:
+    metadata:
+      labels:
+        {{- include "cairn.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: temporal
+    spec:
+      containers:
+        - name: temporal
+          image: {{ .Values.profiles.temporal.image }}
+          ports:
+            - name: grpc
+              containerPort: 7233
+          env:
+            - name: DB
+              value: postgres12
+            - name: DB_PORT
+              value: "5432"
+            - name: POSTGRES_SEEDS
+              value: {{ if .Values.postgres.enabled }}{{ include "cairn.postgresName" . }}{{ else }}{{ required "profiles.temporal with an external DSN needs profiles.temporal.address or your own Temporal — the chart cannot auto-setup Temporal against a DSN it only has as a URL" "" }}{{ end }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.user | quote }}
+            - name: POSTGRES_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cairn.secretName" . }}
+                  key: POSTGRES_PASSWORD
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cairn.fullname" . }}-temporal
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal
+spec:
+  ports:
+    - name: grpc
+      port: 7233
+      targetPort: grpc
+  selector:
+    {{- include "cairn.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal
+{{- if .Values.profiles.temporal.ui.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cairn.fullname" . }}-temporal-ui
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "cairn.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: temporal-ui
+  template:
+    metadata:
+      labels:
+        {{- include "cairn.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: temporal-ui
+    spec:
+      containers:
+        - name: temporal-ui
+          image: {{ .Values.profiles.temporal.ui.image }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: TEMPORAL_ADDRESS
+              value: {{ include "cairn.temporalAddress" . | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cairn.fullname" . }}-temporal-ui
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal-ui
+spec:
+  # ClusterIP only, like compose's 127.0.0.1 binding: reach it with
+  # `kubectl port-forward svc/<release>-temporal-ui 8233:8080`.
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+  selector:
+    {{- include "cairn.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal-ui
+{{- end }}
+{{- end }}

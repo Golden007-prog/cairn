@@ -1,0 +1,19 @@
+cairn
+Copyright 2026 The cairn Authors
+
+This product includes software developed by the cairn project.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this file except in compliance with the License. You may obtain a copy of
+the License in the LICENSE file at the root of this repository, or at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Each distributable package in this repository — the engine (`cairn`), the
+authoring SDK (`cairn-sdk`), the typed client (`cairn-client`), the ask agent
+(`cairn-ask`), and every operator pack under `cairn/operators/` — carries its
+own copy of the License so the terms travel with the wheel.
+
+Third-party dependencies are licensed under their own terms; see
+THIRD_PARTY_NOTICES.md (Python dependencies) and
+console/THIRD_PARTY_NOTICES.md (components bundled into the web console).

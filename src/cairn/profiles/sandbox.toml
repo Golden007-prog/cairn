@@ -1,0 +1,34 @@
+# sandbox — the environment a Playground run executes in (#1570, ADR-0093 P1).
+#
+# It exists because the Playground was already LOOKING for it and not finding
+# it. PlaygroundView picks the first profile matching /playground|sandbox/i and
+# falls back to `profiles[0]` — which, alphabetically, was `campaign.toml`. So
+# every new user's Playground banner read "Runs in **campaign**": the name of
+# the 1M-row training campaign's private environment, shown to a stranger on
+# the first screen they are told to visit.
+#
+# Shipping the profile the code already asks for fixes that at the root rather
+# than papering over the label. It also gives the sandbox a real, governed home
+# instead of borrowing whichever environment happened to sort first.
+#
+# A sandbox run mocks its operators (`?sandbox=true`, ADR-0073 #826), so this
+# profile does not need — and deliberately does not get — production
+# credentials, remote compute, or a durable runtime. It extends `local-dev`,
+# the zero-config base: everything in-tree, nothing external to spin up,
+# nothing that can spend money or touch prod infrastructure.
+
+[profile]
+extends = "local-dev.toml"
+# #1570 — user-facing: the one environment a public install offers. A deployment
+# adds its own (the platform's `prod`, ADR-0134 D5); everything else here is a
+# base layer or a deployment variant (see cairn/core/pack/curation.py for the
+# tier vocabulary).
+visibility = "public"
+
+[profile.backends]
+# Explicit, even though local-dev already implies them: a reader of THIS file
+# should be able to see that a sandbox run cannot reach anything expensive
+# without following an inheritance chain to find out.
+durable_runtime = "in_process"   # no Temporal — a sandbox run is short and local
+dataflow_engine = "builtin"      # in-tree, one box, no Metaflow/Ray
+ml_engine       = "builtin"      # no GPU dispatch; sandbox never trains for real

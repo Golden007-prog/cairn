@@ -1,0 +1,65 @@
+format = "cairn.contracts/1"
+
+[distribution]
+name = "cairn-contracts-train"
+version = "1.0.0"
+
+[[definitions]]
+id = "train.finetune"
+revision = "1.0.0"
+kind = "capability"
+path = "capabilities/train.finetune.json"
+
+[[definitions]]
+id = "train.finetune.input"
+revision = "1.0.0"
+kind = "schema"
+path = "schemas/train.finetune.input.json"
+
+[[definitions]]
+id = "train.finetune.configuration"
+revision = "1.0.0"
+kind = "schema"
+path = "schemas/train.finetune.configuration.json"
+
+[[definitions]]
+id = "train.finetune.output"
+revision = "1.0.0"
+kind = "schema"
+path = "schemas/train.finetune.output.json"
+
+[[definitions]]
+id = "train.eval_loss"
+revision = "1.0.0"
+kind = "capability"
+path = "capabilities/train.eval_loss.json"
+
+[[definitions]]
+id = "train.eval_loss.input"
+revision = "1.0.0"
+kind = "schema"
+path = "schemas/train.eval_loss.input.json"
+
+[[definitions]]
+id = "train.eval_loss.configuration"
+revision = "1.0.0"
+kind = "schema"
+path = "schemas/train.eval_loss.configuration.json"
+
+[[definitions]]
+id = "train.eval_loss.output"
+revision = "1.0.0"
+kind = "schema"
+path = "schemas/train.eval_loss.output.json"
+
+[[definitions]]
+id = "train.finetune.report"
+revision = "1.0.0"
+kind = "report"
+path = "reports/train.finetune.report.json"
+
+[[definitions]]
+id = "train.eval_loss.report"
+revision = "1.0.0"
+kind = "report"
+path = "reports/train.eval_loss.report.json"

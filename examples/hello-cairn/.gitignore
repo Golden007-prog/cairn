@@ -1,0 +1,3 @@
+# The root .gitignore drops every `data/` dir (scratch datasets); this pack's
+# sample IS source, so it is re-included here.
+!data/

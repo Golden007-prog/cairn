@@ -1,0 +1,127 @@
+{
+  "budget": null,
+  "critique": null,
+  "description": "Drafts a blameless post-mortem markdown from a completed RCA and\npersists it via the postmortem/write_file operator. No observability\ntools: the parent RCA is the only input source.\n",
+  "evals": null,
+  "flow": {
+    "nodes": {
+      "draft": {
+        "capabilities": [],
+        "knowledge": [
+          "runbooks"
+        ],
+        "max_iterations": 8,
+        "model": "gpt-4o-mini",
+        "output_schema": null,
+        "prompt_section": "draft",
+        "retry": null,
+        "type": "prompt"
+      }
+    },
+    "root": {
+      "children": [
+        {
+          "ref": "draft",
+          "type": "action"
+        },
+        {
+          "approval": null,
+          "artifacts": null,
+          "budget": null,
+          "execution": null,
+          "id": "write-postmortem",
+          "input": {
+            "markdown": "$default($state.findings.draft, \"\")",
+            "run_id": "$input.run_id",
+            "service": "$input.service",
+            "title": "$input.title"
+          },
+          "operator": "postmortem/write_file",
+          "output": {
+            "bytes": "$state.bytes",
+            "error": "$state.error",
+            "ok": "$state.ok",
+            "path": "$state.path"
+          },
+          "policy": null,
+          "ref": null,
+          "resources": null,
+          "secrets": [],
+          "type": "operation",
+          "version": ">= 0.1",
+          "with_": {}
+        },
+        {
+          "approval": {
+            "reason": "Publish the incident post-mortem to the Notion incident record",
+            "required": true
+          },
+          "artifacts": null,
+          "budget": null,
+          "execution": null,
+          "id": "publish-postmortem",
+          "input": {
+            "args": {
+              "block_id": "$default($input.notion_page_id, \"\")",
+              "children": [
+                {
+                  "paragraph": {
+                    "rich_text": [
+                      {
+                        "text": {
+                          "content": "$default($state.findings.draft, \"Incident post-mortem (draft text unavailable).\")"
+                        },
+                        "type": "text"
+                      }
+                    ]
+                  },
+                  "type": "paragraph"
+                }
+              ]
+            },
+            "server": "notion",
+            "tool": "append_block_children"
+          },
+          "operator": "mcp/call",
+          "output": {
+            "error": "$state.findings.notion_error",
+            "ok": "$state.findings.notion_published"
+          },
+          "policy": null,
+          "ref": null,
+          "resources": null,
+          "secrets": [],
+          "type": "operation",
+          "version": ">= 0.1",
+          "with_": {}
+        }
+      ],
+      "type": "sequence"
+    },
+    "source": "behavior_tree",
+    "type": "state_machine"
+  },
+  "input_schema": "schema://incident/PostmortemRequest",
+  "knowledge": [],
+  "models": null,
+  "module": "postmortem",
+  "name": "post-incident-postmortem",
+  "output": {
+    "format": "structured_json",
+    "schema_name": "PostmortemResult"
+  },
+  "output_schema": "schema://incident/PostmortemResult",
+  "tags": [
+    "output:document",
+    "cost:low",
+    "flow:state_machine",
+    "flow:operation-driven"
+  ],
+  "tools": {
+    "dynamic": [],
+    "forbidden": [],
+    "required": [],
+    "tool_k": 5
+  },
+  "version": "2.0.0"
+}

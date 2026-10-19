@@ -1,0 +1,35 @@
+# pipelines/import.yaml — governed dataset IMPORT (#1466 follow-up): the entry
+# path for EXTERNAL data into the dataset registry. The console (or API) stages
+# an uploaded file, then this pipeline runs the same admission checks generated
+# data gets (normalize → dedup → decontam → PII redact) and registers the
+# cleaned export as a named, hash-pinned version — so a registry name is a
+# guarantee regardless of where the bytes came from. A direct write path into
+# the registry deliberately does not exist (owner ruling 2026-08-20: imports go
+# through a governed run, never around it).
+name: import
+kind: pipeline
+description: >
+  Import an external dataset through admission checks (normalize, dedup,
+  decontamination, PII redaction) and register the cleaned export as a
+  named, hash-pinned dataset version.
+
+inputs:
+  path: {type: Dataset, description: "Staged upload path or s3:// uri of the file to import."}
+  register: {type: str, description: "Dataset-registry name to version the cleaned export under."}
+  eval_path: {type: str, default: "", description: "Optional eval set for decontamination (empty = honest skip)."}
+
+governance:
+  budget: {usd: 1}
+  series: dataset-import
+
+steps:
+  - id: clean
+    flow: clean
+    with:
+      path: $input.path
+      eval_path: $input.eval_path
+      register: $input.register
+    produces: {export: Dataset}
+
+outputs:
+  dataset_uri: clean.export

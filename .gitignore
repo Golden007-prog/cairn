@@ -1,0 +1,100 @@
+# Secrets
+.env
+prod/.env.prod
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data caches
+data/chroma/
+*.log
+
+# Eval reports
+evals/last_report.json
+evals/*.report.json
+
+# Build
+build/
+dist/
+# The platform image's build context (#2514): the public wheels the ship step copies beside
+
+# Observability sinks (src/obs)
+events.jsonl
+replays/
+
+# CLI run artifacts: trace dirs (cairn run) + the hash-chained audit log.
+.cairn/
+audit.jsonl
+
+# DuckDB local analytics (scripts/dashboard.py)
+obs.duckdb
+*.duckdb.wal
+*.duckdb.tmp/
+
+# Optional external MCP backend — operators drop this in to enable CAIRN_BACKEND=otel.
+# Without it, the selector falls back to the mock backend with a warning.
+src/mcp/tools/_backends/otel.py
+tests/test_otel_backend.py
+
+# Refactor scratch — incident agent package split kept on disk for reference
+# but not part of the shipped tree. __init__.py files were removed so Python
+# imports src/agents/incident.py (the working single-file module) instead.
+src/agents/incident/
+
+
+.cache/
+.chainlit/
+.files/
+chainlit_app.py
+chainlit.md
+.deepeval/
+.langgraph_api/
+prod/
+
+# stale pre-rename data dir (runtime traces); data now lives in .cairn/
+.obs-agent/
+
+# Never commit a secrets file under any name (an untracked .env backup once held
+# the prod Postgres password, JWT secret and admin hash), nor local work areas.
+.env.*
+!.env.example
+!deploy/light/.env.infisical.example
+# the feature-proof profile's generated keys (scripts/oss/proof_seed.py), never committed
+deploy/light/.proof/
+.proof-out/
+*.bak
+/private/
+/site/
+/data/
+# the generated hello-cairn proof report (scripts/oss/feature_proof.sh)
+/FEATURE_PROOF.md

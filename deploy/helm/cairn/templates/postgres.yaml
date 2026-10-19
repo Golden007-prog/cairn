@@ -1,0 +1,95 @@
+{{- if .Values.postgres.enabled }}
+{{/*
+The app Postgres: run store + run events + LangGraph checkpointer + (under
+runtime=dbos) the DBOS system schema. ONE database for all of it (#29), the
+same pgvector image compose uses so the RAG tier works unchanged.
+
+Not a sub-chart on purpose: a bitnami dependency to vendor, pin and audit buys
+nothing over 60 lines of StatefulSet, and the alternative — `postgres.external.dsn`
+pointing at a managed database — is the shape any serious cluster deploy wants.
+*/}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "cairn.postgresName" . }}
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  serviceName: {{ include "cairn.postgresName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "cairn.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: postgres
+  template:
+    metadata:
+      labels:
+        {{- include "cairn.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          ports:
+            - name: postgres
+              containerPort: {{ .Values.postgres.port }}
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.user | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.database | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cairn.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              # A subdirectory: initdb refuses a volume root that carries
+              # lost+found, which most dynamically-provisioned PVs do.
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.postgres.user | quote }}]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.postgres.user | quote }}]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.postgres.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.persistence.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cairn.postgresName" . }}
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  clusterIP: None
+  ports:
+    - name: postgres
+      port: {{ .Values.postgres.port }}
+      targetPort: postgres
+  selector:
+    {{- include "cairn.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+{{- end }}

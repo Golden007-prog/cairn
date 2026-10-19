@@ -1,0 +1,67 @@
+:root {
+  --sl-content-width: 64rem;
+  --sl-text-5xl: 3.6rem;
+  /* Brand accent — emerald, to match the marketing landing page. */
+  --sl-color-accent-low: #032420;
+  --sl-color-accent: #10b981;
+  --sl-color-accent-high: #a7f3d0;
+}
+:root[data-theme='light'] {
+  --sl-color-accent-low: #d1fae5;
+  --sl-color-accent: #059669;
+  --sl-color-accent-high: #064e3b;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  background: var(--sl-color-bg-nav);
+}
+
+.sl-markdown-content table { font-size: 0.95rem; }
+
+/* ── Mermaid diagrams: full-width responsive, dark-mode friendly ─── */
+
+.sl-markdown-content svg[id^="mermaid"],
+.sl-markdown-content .mermaid svg,
+.sl-markdown-content svg[aria-roledescription] {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+  display: block;
+  margin: 1.5rem auto;
+  background: #ffffff;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  min-height: 280px;
+  cursor: zoom-in;
+}
+
+:root[data-theme="dark"] .sl-markdown-content svg[id^="mermaid"],
+:root[data-theme="dark"] .sl-markdown-content svg[aria-roledescription] {
+  background: #f8fafc;
+  border-color: #334155;
+}
+
+.sl-markdown-content svg[id^="mermaid"] text,
+.sl-markdown-content svg[aria-roledescription] text {
+  font-size: 15px !important;
+}
+
+.medium-zoom-overlay {
+  background: rgba(15, 23, 42, 0.9) !important;
+  z-index: 9998;
+}
+
+.medium-zoom-image--opened {
+  z-index: 9999;
+  cursor: zoom-out;
+}

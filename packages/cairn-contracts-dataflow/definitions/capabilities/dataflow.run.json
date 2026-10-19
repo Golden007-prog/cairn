@@ -1,0 +1,9 @@
+{
+  "format": "cairn.capability/1",
+  "id": "dataflow.run",
+  "revision": "1.0.0",
+  "summary": "Submit a dataflow (a pack-addressed ref or an inline stage list) to the environment's dataflow engine and return its scalar stats and registered artifact ids. Rows never cross the control plane. The stage configurations are open here; stages carry their own stage contracts (ADR-0118).",
+  "input": "contract://dataflow.run.input/1.0.0",
+  "configuration": "contract://dataflow.run.configuration/1.0.0",
+  "output": "contract://dataflow.run.output/1.0.0"
+}

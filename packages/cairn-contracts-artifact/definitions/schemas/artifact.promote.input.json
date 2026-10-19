@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contract://artifact.promote.input/1.0.0",
+  "description": "Move a governed tag onto a registered artifact.",
+  "properties": {
+    "tag": {"description": "Governed tag to move, e.g. 'dataset@prod'.", "title": "Tag", "type": "string"},
+    "artifact_id": {
+      "description": "Registry id (content hash) to point the tag at.",
+      "title": "Artifact Id",
+      "type": "string"
+    },
+    "reason": {
+      "default": "",
+      "description": "Why \u2014 recorded on the audit row the gate writes.",
+      "title": "Reason",
+      "type": "string"
+    }
+  },
+  "required": ["tag", "artifact_id"],
+  "title": "ArtifactPromoteInput",
+  "type": "object"
+}

@@ -1,0 +1,32 @@
+# Model registry — maps logical roles to actual provider models.
+#
+# Agents reference roles (fast, strong, embed), not model names.
+# Switching all "fast" agents from gpt-4o-mini to claude-haiku is one line.
+# Cost tracking reads from here — always in sync with the actual model.
+#
+# Override any field via env: MODEL_FAST_NAME=claude-haiku-4-5-20251001
+
+models:
+  fast:
+    provider: openai
+    name: gpt-4o-mini
+    cost_per_1k_input: 0.00015
+    cost_per_1k_output: 0.0006
+    max_tokens: 2048
+    temperature: 0.3
+
+  strong:
+    provider: openai
+    name: gpt-4o
+    cost_per_1k_input: 0.0025
+    cost_per_1k_output: 0.01
+    max_tokens: 4096
+    temperature: 0.3
+
+  router:
+    provider: openai
+    name: gpt-4o-mini
+    cost_per_1k_input: 0.00015
+    cost_per_1k_output: 0.0006
+    max_tokens: 256
+    temperature: 0.0

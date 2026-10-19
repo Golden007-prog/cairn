@@ -1,0 +1,10 @@
+{
+  "format": "cairn.report/1",
+  "id": "train.finetune.report",
+  "revision": "1.0.0",
+  "spec": {
+    "stages": ["train"],
+    "series": [{"name": "loss", "unit": ""}],
+    "scalars": ["train_loss", "eval_loss", "tokens_seen", "steps_run"]
+  }
+}

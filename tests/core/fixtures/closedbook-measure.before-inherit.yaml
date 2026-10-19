@@ -1,0 +1,36 @@
+# pipelines/closedbook-measure.yaml — ONE leg: the closed-book QA measurement
+# (flow training/closedbook-eval) against ANY OpenAI-compatible endpoint, so the
+# same harness can be run before training (tag baseline, model = the base) and
+# after (tag post, model = the served adapter) as separate, comparable runs.
+name: closedbook-measure
+kind: pipeline
+# 1M-campaign measurement machinery (#1409)
+visibility: internal
+description: >
+  Measure a served model closed-book on the held-out / paraphrase / control
+  splits of a facts-QA set: correct | hallucinated | abstain per split.
+
+inputs:
+  qa: {type: str, description: "facts-qa.jsonl (all splits), local path or s3:// URI."}
+  endpoint_url: {type: str, description: "OpenAI-compatible endpoint (vLLM / llama.cpp)."}
+  model: {type: str, default: "default", description: "Model id the endpoint expects."}
+  judge_model: {type: str, default: "deepseek/deepseek-v4-pro"}
+  max_per_split: {type: int, default: 0}
+  tag: {type: str, default: "closedbook"}
+
+governance:
+  budget: {usd: 10}
+  series: closedbook-measure
+  approvers: ml-leads
+
+steps:
+  - id: measure
+    flow: closedbook-eval
+    with:
+      qa: $input.qa
+      endpoint_url: $input.endpoint_url
+      model: $input.model
+      judge_model: $input.judge_model
+      max_per_split: $input.max_per_split
+      tag: $input.tag
+    consumes: {qa: Dataset}

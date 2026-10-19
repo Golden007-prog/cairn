@@ -1,0 +1,72 @@
+# cairn-operator-dataflow — the ONE door to the data plane (ADR-0081 D1, #1048).
+# dataflow/run submits a DataflowSpec to the environment's DataflowEngine
+# backend (builtin here; metaflow and skypilot in their own optional wheels, ADR-0134 D2/D3) and returns artifacts + scalar
+# stats. Engines are classes in this wheel, selected by environment config —
+# NEVER separate operators (rejected design R7: the fix-trio mistake).
+[pack]
+name        = "obs-operator-dataflow"
+version     = "0.1.0"
+type        = "operator"
+description = "Governed dataflow execution behind one operator (dataflow.run)."
+kind        = "operator"
+publisher   = "cairn"
+trust_level = "official"
+
+[compat]
+cairn_engine = ">=0.1.0"
+
+[operator."dataflow/run"]
+version       = "0.1.0"
+implements    = ["contract://dataflow.run/1.0.0"]
+input_schema  = "DataflowRunInput"
+output_schema = "DataflowRunOutput"
+long_running = true
+requires_gpu = false
+supports_cancel = true
+supports_heartbeat = false
+supports_mock = true
+risk      = "external_write"
+executors = ["remote_job"]
+
+[operator."dataflow/run".capabilities]
+provides = ["dataflow.run"]
+
+# ml/run — the kind-symmetric door to the ML plane (ADR-0082 D7, #1074).
+# Same thin remote-job shape; the environment's ml_engine backend decides
+# WHERE (builtin / metaflow / flyte / dagster bridges) — never this operator.
+[operator."ml/run"]
+version       = "0.1.0"
+implements    = ["contract://ml.run/1.0.0"]
+input_schema  = "MlRunInput"
+output_schema = "MlRunOutput"
+long_running = true
+requires_gpu = false
+supports_cancel = true
+supports_heartbeat = false
+supports_mock = true
+risk      = "external_write"
+executors = ["remote_job"]
+
+[operator."ml/run".capabilities]
+provides = ["ml.run"]
+
+# Move a governed tag onto an artifact — the HITL-gated external write
+# (ADR-0034, the model/register pattern). requires_approval=true → the durable
+# gate fires at the chokepoint BEFORE the tag moves, so promotion lands in the
+# EXISTING run gate queue instead of needing a second approval mechanism.
+[operator."artifact/promote"]
+version       = "0.1.0"
+implements    = ["contract://artifact.promote/1.0.0"]
+input_schema  = "ArtifactPromoteInput"
+output_schema = "ArtifactPromoteOutput"
+long_running = false
+requires_gpu = false
+supports_cancel = false
+supports_heartbeat = false
+supports_mock = true
+risk      = "external_write"
+executors = ["in_process"]
+requires_approval = true
+
+[operator."artifact/promote".capabilities]
+provides = ["artifact.promote"]

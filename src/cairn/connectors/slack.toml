@@ -1,0 +1,25 @@
+# slack — known-good MCP connector preset.
+#
+# Reference spec for the official Slack MCP server. See github.toml for the
+# usage pattern. NOTE: the engine also has a first-class Slack path (notifier +
+# approver via SLACK_* settings) — use THIS connector only when a pack drives
+# Slack as a generic MCP tool rather than the built-in notify/approve seam.
+
+[connector]
+name        = "slack"
+description = "Slack — post messages, read channels/history."
+publisher   = "modelcontextprotocol"
+
+[server]
+transport = "stdio"
+command   = ["npx", "-y", "@modelcontextprotocol/server-slack"]
+
+[env]
+SLACK_BOT_TOKEN = "required — xoxb- bot token"
+SLACK_TEAM_ID   = "required — workspace/team id"
+
+[scopes]
+note = "Bot scopes: chat:write (post), channels:history / channels:read (read). The official server tool for posting is 'slack_post_message' with a 'channel_id' arg (see CAIRN_MCP_SLACK_* settings)."
+
+[tools]
+common = ["slack_post_message", "slack_list_channels", "slack_get_channel_history"]

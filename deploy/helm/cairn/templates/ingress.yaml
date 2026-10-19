@@ -1,0 +1,49 @@
+{{- if .Values.ingress.enabled }}
+{{/*
+Replaces Caddy. Two things Caddy did that an Ingress must keep doing:
+
+  1. TLS. cert-manager issues it from the cluster-issuer annotation, the way
+     Caddy issued from Let's Encrypt automatically.
+  2. NOT BUFFERING SSE (#774). Caddy needed `flush_interval -1` on
+     /runs/{id}/events and /runs/{id}/stream, or the console's live-run graph
+     sat on "Connected — waiting for events…" while the run completed
+     invisibly. nginx buffers by default too, so proxy-buffering is off for the
+     whole host — a path-scoped Ingress rule cannot express "this route only",
+     and the console requests the WORKSPACE-scoped form
+     (/workspaces/{ws}/runs/{id}/stream) anyway.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "cairn.fullname" . }}
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+  annotations:
+    {{- with .Values.ingress.certManager.clusterIssuer }}
+    cert-manager.io/cluster-issuer: {{ . | quote }}
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.path }}
+            pathType: {{ .Values.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "cairn.fullname" . }}-server
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}

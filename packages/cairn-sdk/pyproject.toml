@@ -1,0 +1,44 @@
+# cairn-sdk — the authoring projection (#1253, ADR-0087 P1).
+#
+# A COMPILER FRONTEND over records, never a runtime: author classes compile to
+# pipelines/*.yaml + flows/*.yaml, the runtime sees only records, and an
+# SDK-authored pack is indistinguishable from a hand-written one after build.
+# Imports NOTHING from cairn.core (same boundary discipline as cairn-client /
+# cairn-ask) — the record LOADER is the contract, and the golden tests in the
+# engine repo prove every compiled record loads and plans.
+[project]
+name = "cairn-sdk"
+version = "0.1.0"
+description = "cairn authoring SDK — compile pipeline/flow classes to cairn records"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [{name = "cairn maintainers"}]
+dependencies = [
+    "pyyaml>=6",
+    # #1255 (P3) — the run surface DELEGATES to the one typed API client; the
+    # SDK adds authoring ergonomics (run-by-ref pinned to the build hash), not
+    # a second HTTP layer.
+    "cairn-client",
+]
+
+[project.urls]
+Homepage = "https://cairndev.sh"
+Documentation = "https://docs.cairndev.sh"
+Source = "https://github.com/cairndev-sh/cairn"
+Issues = "https://github.com/cairndev-sh/cairn/issues"
+
+[tool.uv.sources]
+cairn-client = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cairn_sdk"]
+exclude = ["CLAUDE.md", "AGENTS.md"]
+
+# Process files (agent instructions) and tests stay out of the source archive.
+[tool.hatch.build.targets.sdist]
+exclude = ["CLAUDE.md", "AGENTS.md", "/.claude", "/tests"]

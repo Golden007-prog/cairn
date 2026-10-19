@@ -1,0 +1,235 @@
+"""``cairn lineage`` — show the content-addressed provenance record(s) for a subject (#146).
+
+Domain-neutral. It reads the hash-chained audit log (the same ``CAIRN_AUDIT_LOG``
+that any ``…-lineage-audit`` node writes to), finds the ``lineage.record`` rows for
+a subject, VERIFIES the chain as it reads (recomputing each row's hash from the
+previous — tamper-evidence you can see), and renders whatever the record carries
+plus the ``run_id`` to reproduce it (``cairn replay <run_id>``).
+
+The model-training spine is the first writer (subject = the model name; keys =
+dataset/config/adapter/eval/cost/promotion), but the reader assumes none of that:
+an incident RCA, a Terraform plan review, or any run that writes a
+``lineage.record`` row gets the same listing, chain verification and replay for
+free. Read-only: it never mutates the log.
+"""
+
+from __future__ import annotations
+from cairn.core.settings import getenv
+
+import argparse
+import hashlib
+import json as _json
+import os
+import sys
+from pathlib import Path
+from typing import Any, Optional
+
+import typer
+
+_ACTION = "lineage.record"
+# Header keys rendered specially; everything else in the record body is rendered
+# generically (so the reader needs no knowledge of any domain's record shape).
+_HEADER_KEYS = {"subject", "model_name", "run_id"}
+
+
+#: The capability whose provider writes ``lineage.record`` rows — the platform's lineage
+#: operator, absent from a public install (#2536, ADR-0127 D7). The reader names the
+#: capability, never the operator: core hard-codes no ref of a non-public pack (ADR-0120 D3).
+_CAPABILITY = "lineage.record"
+
+
+def _writer_installed() -> bool:
+    """Does any installed operator provide the ``lineage.record`` capability? Read from the
+    operator packs' manifests (``pack.toml``), without importing any operator pack."""
+    from cairn.core.operator.loader import discover_operator_pack_manifests  # noqa: PLC0415 — off the CLI's import path
+
+    return any(_CAPABILITY in (e.provides_capabilities or ())
+               for e in discover_operator_pack_manifests().values())
+
+
+def _no_writer_lines() -> list[str]:
+    return [
+        "no lineage records: they are written by the platform's lineage operator, which "
+        "this install does not have.",
+        "  For a run's graph (the runs it came from and the runs derived from it) ask the "
+        "server: GET /runs/{id}/lineage; `cairn remote status <run>` shows the run itself.",
+    ]
+
+
+def _audit_path(override: Optional[str]) -> Path:
+    """The audit log path: ``--audit-log`` wins, else ``CAIRN_AUDIT_LOG``, else CWD."""
+    return Path(override or getenv("CAIRN_AUDIT_LOG", "audit.jsonl"))
+
+
+def _canonical(payload: dict) -> str:
+    """Stable serialization for hashing — MUST match audit/store's _canonical."""
+    return _json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _read_chain(path: Path) -> tuple[list[dict], list[int]]:
+    """Read every row + verify the hash-chain. Returns (rows, broken_indices).
+
+    A row's ``hash`` must equal ``sha256(prev_hash + canonical(payload))`` where
+    ``payload`` is the row minus its ``prev_hash``/``hash`` fields and ``prev_hash``
+    is the previous row's hash (genesis = 64 zeros). Any mismatch is a broken link.
+    """
+    rows: list[dict] = []
+    broken: list[int] = []
+    prev = "0" * 64
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = _json.loads(line)
+        except Exception:  # noqa: BLE001 — a corrupt line is itself a break
+            broken.append(len(rows))
+            rows.append({"_corrupt": line})
+            continue
+        payload = {k: v for k, v in row.items() if k not in ("prev_hash", "hash")}
+        recomputed = hashlib.sha256((prev + _canonical(payload)).encode("utf-8")).hexdigest()
+        if row.get("prev_hash") != prev or row.get("hash") != recomputed:
+            broken.append(len(rows))
+        prev = row.get("hash", prev)
+        rows.append(row)
+    return rows, broken
+
+
+def _subject_of(row: dict) -> str:
+    """The thing a record is about — generic ``subject``, else the model name, else
+    the audit event ``target``. Lets one reader serve every domain's records."""
+    meta = row.get("metadata") or {}
+    return meta.get("subject") or meta.get("model_name") or row.get("target") or "?"
+
+
+def _matches(row: dict, subject: Optional[str]) -> bool:
+    if row.get("action") != _ACTION:
+        return False
+    if not subject:
+        return True
+    meta = row.get("metadata") or {}
+    return subject in (row.get("target"), meta.get("model_name"), meta.get("subject"))
+
+
+def _scalar(v: Any) -> str:
+    return _json.dumps(v, default=str) if isinstance(v, (dict, list)) else str(v)
+
+
+def _fmt_value(v: Any) -> str:
+    """Render a record field generically: a dict → ``k=v`` pairs, a list → CSV,
+    a scalar → itself. One level of structure is enough for a provenance record."""
+    if isinstance(v, dict):
+        return "  ".join(f"{k}={_scalar(sub)}" for k, sub in v.items())
+    if isinstance(v, list):
+        return ", ".join(_scalar(x) for x in v)
+    return str(v)
+
+
+def _field(label: str, value: str) -> str:
+    key = label + ":"
+    pad = " " * max(1, 11 - len(key))  # ≥1 space even when the key overflows the column
+    return f"  {key}{pad}{value}"
+
+
+def _render_record(row: dict) -> str:
+    """Render any lineage record: the subject heading + run + every body key it
+    carries + the audit-chain receipt + the replay command. No domain assumptions."""
+    rec = row.get("metadata") or {}
+    run_id = rec.get("run_id") or row.get("run_id") or "?"
+    lines = [
+        _subject_of(row),
+        _field("run", run_id),
+        _field("ts", row.get("ts") or "(stamped at write)"),
+    ]
+    for k, v in rec.items():
+        if k in _HEADER_KEYS:
+            continue
+        lines.append(_field(k, _fmt_value(v)))
+    lines.append(_field("receipt", f"{(row.get('hash') or '?')[:19]}…  (audit-chain hash)"))
+    lines.append(_field("replay", f"cairn replay {run_id}"))
+    return "\n".join(lines)
+
+
+def _render_line(row: dict) -> str:
+    rec = row.get("metadata") or {}
+    run_id = rec.get("run_id") or row.get("run_id") or "?"
+    receipt = (row.get("hash") or "")[:16]
+    return f"{_subject_of(row):24}  {run_id:28}  {receipt}…"
+
+
+def _run(subject: Optional[str], *, json: bool, audit_log: Optional[str]) -> int:
+    path = _audit_path(audit_log)
+    if not path.exists() and not _writer_installed():
+        print("\n".join(_no_writer_lines()), file=sys.stderr)
+        return 1
+    if not path.exists():
+        print(f"no audit log at {path}", file=sys.stderr)
+        print("  (set CAIRN_AUDIT_LOG or pass --audit-log; a governed run writes its "
+              "lineage.record row there)", file=sys.stderr)
+        return 1
+
+    rows, broken = _read_chain(path)
+    matches = [r for r in rows if _matches(r, subject)]
+
+    if json:
+        print(_json.dumps(
+            {"records": [r.get("metadata") or r for r in matches],
+             "chain_ok": not broken},
+            indent=2, default=str,
+        ))
+    elif not matches:
+        where = f" for {subject!r}" if subject else ""
+        print(f"no lineage records{where} in {path}")
+        if not _writer_installed():
+            print("\n".join(_no_writer_lines()), file=sys.stderr)
+        return 1
+    elif subject:
+        for i, r in enumerate(matches):
+            if i:
+                print()
+            print(_render_record(r))
+    else:
+        print(f"lineage records in {path} ({len(matches)}):\n")
+        print(f"  {'SUBJECT':24}  {'RUN':28}  RECEIPT")
+        for r in matches:
+            print(f"  {_render_line(r)}")
+
+    if broken:
+        print(f"\n⚠ audit chain broken at row(s) {broken} — the log was altered "
+              f"or truncated; provenance is NOT trustworthy.", file=sys.stderr)
+        return 2
+    return 0
+
+
+# ─── entry points ───────────────────────────────────────────────────
+
+
+def cmd(
+    subject: Optional[str] = typer.Argument(
+        None,
+        help="Subject of the record — a model name, incident id, plan id, … "
+        "(matched on the audit target / model_name / subject). Omit to list all.",
+    ),
+    json: bool = typer.Option(False, "--json", help="Emit the matching records as JSON."),
+    audit_log: Optional[str] = typer.Option(
+        None, "--audit-log", help="Audit log path (default: $CAIRN_AUDIT_LOG or ./audit.jsonl)."
+    ),
+) -> None:
+    """Show the content-addressed provenance/lineage record(s) for a subject."""
+    raise typer.Exit(code=_run(subject, json=json, audit_log=audit_log))
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="cairn lineage",
+        description="Show the content-addressed provenance record(s) for a subject.",
+    )
+    parser.add_argument("subject", nargs="?", default=None)
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--audit-log", default=None)
+    args = parser.parse_args(argv)
+    return _run(args.subject, json=args.json, audit_log=args.audit_log)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

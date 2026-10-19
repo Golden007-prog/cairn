@@ -1,0 +1,323 @@
+# deploy/light/docker-compose.yml — cairn-light: the curated quickstart stack (#1828 S3, #1831).
+#
+# Three services, keyless, in-process execution, the `light` feature preset on:
+#
+#   browser ──▶ caddy :8080 ──▶ server :9090 (in-process runtime + scheduler, CAIRN_LIGHT=on)
+#                                  └ run store + checkpointer ▶ postgres
+#
+#   cd deploy/light && docker compose up -d --build      # then open http://localhost:8080
+#
+# No .env is required: every value has a default. Light is a DEPLOYMENT POSTURE
+# of the same image the prod stack runs, not a fork:
+# `CAIRN_LIGHT=on` turns the held surfaces off (builder, datasets, judges, knowledge,
+# remote jobs — cairn/core/features.py LIGHT_OFF; pipelines are always on, ALWAYS_ON);
+# their code, tests and CLI stay in the image. Set CAIRN_FEATURE_<NAME>=on
+# and the surface is back — nothing to reinstall.
+#
+# Three documented add-ons, all compose profiles (COMPOSE_PROFILES in .env or
+# `--profile` on the command line):
+#   llm-gateway   the bundled LiteLLM proxy — set LITELLM_MASTER_KEY
+#   backup        periodic pg_dump of the app database into a volume
+#   infisical     a self-hosted Infisical secrets server (+ its Postgres and Redis)
+#                 for the builtin secrets/infisical operator — its own secrets go in
+#                 .env.infisical (copy .env.infisical.example), never in .env
+#   proof         the feature-proof services (ADR-0127 D1, hello-cairn WP7): the
+#                 infisical profile's three services, a key-only sshd for the SSH
+#                 legs, and a loopback relay to the app Postgres so the matrix in
+#                 tests/e2e/hello can run its Postgres cells from the host.
+#                 scripts/oss/proof_seed.py writes the ssh key into the gitignored .proof/
+#                 and throwaway Infisical secrets into .env.infisical (generated, never
+#                 real) when there are none; scripts/oss/feature_proof.sh
+#                 brings the profile up, runs the matrix and tears it down.
+# The prod stack's other profiles (temporal, metaflow, otel, mlflow, observability)
+# stay where they are; light does not document them.
+#
+# "Deploy for a team" = the Helm chart (deploy/helm/cairn): TLS domain, auth ON (CAIRN_JWT_SECRET + an admin
+# password), the same image. Setting CAIRN_JWT_SECRET + CAIRN_API_PASSWORD in
+# deploy/light/.env turns auth on here too (every API call then needs a token).
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "${CAIRN_PORT:-8080}:80"
+    environment:
+      # The Caddyfile's site address. `:80` = plain HTTP on the container
+      # port (published as CAIRN_PORT); no domain, no certificate. Point it at a
+      # real domain (`cairn.example.com`) and Caddy provisions TLS by itself —
+      # then publish 443 as well.
+      CADDY_DOMAIN: ${CADDY_DOMAIN:-:80}
+    volumes:
+      # The Caddyfile beside this file carries the SSE flush rule (#774) the
+      # live run stream needs.
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      server:
+        condition: service_healthy
+
+  server:
+    image: ${CAIRN_IMAGE:-cairn-engine:light}
+    build:
+      context: ../..
+      dockerfile: Dockerfile.engine
+      args:
+        PRODUCTION_TIER: ${PRODUCTION_TIER:-0}
+    command: ["cairn-server"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9090/healthz', timeout=3).status < 500 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    env_file:
+      # Optional: an OPENAI_API_KEY, a LITELLM_MASTER_KEY, auth for a team. ALL of
+      # .env reaches the engine, so the Infisical server's own secrets live in
+      # .env.infisical, which only the infisical services load (#2577).
+      - path: .env
+        required: false
+    environment:
+      # ── the light posture ─────────────────────────────────────────────
+      CAIRN_LIGHT: ${CAIRN_LIGHT:-${OBS_LIGHT:-on}}
+      # The profile binds the two governance services the light promise rests
+      # on: `audit.sink` (the hash-chained receipt of the audited seams — Runs →
+      # Audit / replay was EMPTY without it, #1833 run 3) and `redact.text` at
+      # the LLM egress. `secure` extends local-dev and asks for nothing the
+      # image lacks: every profile the engine ships binds only the builtins
+      # (ADR-0134 D5). Path form: the wheel's packaged copy.
+      CAIRN_PROFILE: ${CAIRN_PROFILE:-${OBS_PROFILE:-/app/.venv/lib/python3.13/site-packages/cairn/profiles/secure.toml}}
+      CAIRN_RUNTIME: ${CAIRN_RUNTIME:-${OBS_RUNTIME:-inprocess}}
+      # ── keyless by default ────────────────────────────────────────────
+      # Empty = no login gate (the server logs AUTH DISABLED at boot). Set both
+      # to turn auth on; CAIRN_REQUIRE_AUTH stays unset so an empty secret is a
+      # keyless dev box, not a refused boot (that guard is a production deployment's).
+      CAIRN_JWT_SECRET: ${CAIRN_JWT_SECRET:-${OBS_JWT_SECRET:-}}
+      CAIRN_API_USER: ${CAIRN_API_USER:-${OBS_API_USER:-admin}}
+      CAIRN_API_PASSWORD: ${CAIRN_API_PASSWORD:-${OBS_API_PASSWORD:-}}
+      # ── inference: mock until a key is given ──────────────────────────
+      CAIRN_BACKEND: ${CAIRN_BACKEND:-${OBS_BACKEND:-mock}}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # ── state: one Postgres (run store + checkpointer + feature flags) ─
+      CAIRN_TRIGGER_PORT: "9090"
+      # #1507 makes a KEYLESS server bind 127.0.0.1 by default — right on a
+      # laptop, wrong inside a container: caddy could not reach it and every
+      # request through the published port was a 502 (caught by the fresh-clone
+      # gate, #1833). Inside the compose network 0.0.0.0 is still private: the
+      # server has `expose`, not `ports`, so caddy is the only door.
+      CAIRN_TRIGGER_HOST: ${CAIRN_TRIGGER_HOST:-${OBS_TRIGGER_HOST:-0.0.0.0}}
+      CAIRN_STORAGE: postgres://cairn:${POSTGRES_PASSWORD:-cairn}@postgres:5432/cairn
+      CAIRN_CHECKPOINTER: ${CAIRN_CHECKPOINTER:-${OBS_CHECKPOINTER:-postgres}}
+      CAIRN_CHECKPOINTER_DSN: postgres://cairn:${POSTGRES_PASSWORD:-cairn}@postgres:5432/cairn
+      CAIRN_AUDIT_LOG: /root/.cairn/audit.jsonl
+      # bus_messages retention (#1510) — same defaults as prod
+      CAIRN_BUS_RETENTION_DAYS: ${CAIRN_BUS_RETENTION_DAYS:-7}
+      CAIRN_RETENTION_SWEEP_HOURS: ${CAIRN_RETENTION_SWEEP_HOURS:-6}
+      # ── optional LLM gateway (--profile llm-gateway) ──────────────────
+      LLM_GATEWAY: ${LLM_GATEWAY:-direct}
+      LLM_GATEWAY_URL: ${LLM_GATEWAY_URL:-}
+      LLM_GATEWAY_API_KEY: ${LLM_GATEWAY_API_KEY:-}
+    volumes:
+      - cairn_data:/root/.cairn
+    expose:
+      - "9090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cairn
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cairn}
+      POSTGRES_DB: cairn
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cairn"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── add-on: the bundled LiteLLM proxy (--profile llm-gateway) ───────────
+  # Point cairn at it with LLM_GATEWAY=proxy,
+  # LLM_GATEWAY_URL=http://litellm:4000, LLM_GATEWAY_API_KEY=<LITELLM_MASTER_KEY>.
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    profiles: ["llm-gateway"]
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # No `:?` guard here: compose interpolates EVERY service, profile on or
+      # off, so a guard on this add-on would refuse the bare 3-service `up`
+      # (caught by the fresh-clone gate, #1833). An empty key makes LiteLLM
+      # start OPEN — set LITELLM_MASTER_KEY in .env before enabling the profile.
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    expose:
+      - "4000"
+
+  # ── add-on: periodic pg_dump (--profile backup) ─────────────────────────
+  # one gzipped dump per interval, keep the last N.
+  pg-backup:
+    image: pgvector/pgvector:pg16
+    profiles: ["backup"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-cairn}
+      CAIRN_BACKUP_INTERVAL_SECONDS: ${CAIRN_BACKUP_INTERVAL_SECONDS:-${OBS_BACKUP_INTERVAL_SECONDS:-86400}}
+      CAIRN_BACKUP_KEEP: ${CAIRN_BACKUP_KEEP:-${OBS_BACKUP_KEEP:-14}}
+    volumes:
+      - pgbackups:/backups
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "pg-backup: every $${CAIRN_BACKUP_INTERVAL_SECONDS}s, keep $${CAIRN_BACKUP_KEEP}";
+        while true; do
+          ts=$$(date +%Y%m%d-%H%M%S);
+          echo "pg-backup: dumping cairn -> /backups/cairn-$$ts.sql.gz";
+          if pg_dump -h postgres -U cairn cairn | gzip > /backups/cairn-$$ts.sql.gz; then
+            ls -1t /backups/cairn-*.sql.gz | tail -n +$$((CAIRN_BACKUP_KEEP + 1)) | xargs -r rm -f;
+          else
+            echo "pg-backup: dump FAILED" >&2; rm -f /backups/cairn-$$ts.sql.gz;
+          fi;
+          sleep "$${CAIRN_BACKUP_INTERVAL_SECONDS}";
+        done
+
+  # ── add-on: self-hosted Infisical (--profile infisical) ─────────────────
+  # The server the builtin secrets/infisical operator reads from; its own Postgres
+  # and Redis, never the app database. Off unless the profile is on, and nothing
+  # here is a secret: INFISICAL_ENCRYPTION_KEY, INFISICAL_AUTH_SECRET and
+  # INFISICAL_DB_PASSWORD come from .env.infisical, the keys empty by default, and the
+  # server refuses to boot without them (v0.165.16: AUTH_SECRET "Required" in its env
+  # schema; an empty ENCRYPTION_KEY fails the boot migration), so a default key can
+  # never be shipped.
+  # Why a second file (#2577): the engine loads ALL of .env (server.env_file above), so
+  # keys kept there reached the engine container too. An env_file is not an
+  # interpolation source, so the image's own names (ENCRYPTION_KEY, AUTH_SECRET, the
+  # DB password) are set from the INFISICAL_* keys inside the container, at start.
+  # Layout after Infisical's own docker-compose.prod.yml, image pinned.
+  # Point the engine at it (in .env — these are the operator's CLIENT settings, the
+  # engine does read them): CAIRN_PROFILE=<…>/cairn/profiles/prod-infisical.toml
+  # (binds secrets.store → secrets/infisical) and INFISICAL_HOST=http://infisical:8080
+  # plus the machine-identity INFISICAL_CLIENT_ID / _CLIENT_SECRET / _PROJECT_ID.
+  infisical:
+    image: infisical/infisical:v0.165.16
+    profiles: ["infisical", "proof"]
+    restart: unless-stopped
+    env_file:
+      - path: .env.infisical
+        required: false
+    environment:
+      NODE_ENV: production
+      # Infisical reports usage telemetry unless told not to (env schema default "true").
+      TELEMETRY_ENABLED: ${INFISICAL_TELEMETRY_ENABLED:-false}
+      SITE_URL: ${INFISICAL_SITE_URL:-http://localhost:8085}
+      REDIS_URL: redis://infisical-redis:6379
+    # The image's own CMD (Dockerfile.standalone-infisical, v0.165.16 — no ENTRYPOINT),
+    # after mapping the .env.infisical keys onto the names Infisical reads.
+    command:
+      - sh
+      - -c
+      - |
+        export ENCRYPTION_KEY="$${INFISICAL_ENCRYPTION_KEY:-}" AUTH_SECRET="$${INFISICAL_AUTH_SECRET:-}"
+        export DB_CONNECTION_URI="postgres://infisical:$${INFISICAL_DB_PASSWORD:-infisical}@infisical-db:5432/infisical"
+        exec ./standalone-entrypoint.sh
+    ports:
+      # loopback only: the web UI where the machine identity is created
+      - "127.0.0.1:${INFISICAL_PORT:-8085}:8080"
+    depends_on:
+      infisical-db:
+        condition: service_healthy
+      infisical-redis:
+        condition: service_started
+
+  infisical-db:
+    image: postgres:16-alpine
+    profiles: ["infisical", "proof"]
+    restart: unless-stopped
+    env_file:
+      - path: .env.infisical
+        required: false
+    environment:
+      POSTGRES_USER: infisical
+      POSTGRES_DB: infisical
+    # The image's own entrypoint, with POSTGRES_PASSWORD set from .env.infisical
+    # (laptop default `infisical`, like the app Postgres).
+    entrypoint:
+      - sh
+      - -c
+      - export POSTGRES_PASSWORD="$${INFISICAL_DB_PASSWORD:-infisical}"; exec docker-entrypoint.sh postgres
+    volumes:
+      - infisical_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U infisical"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  infisical-redis:
+    image: redis:7-alpine
+    profiles: ["infisical", "proof"]
+    restart: unless-stopped
+    volumes:
+      - infisical_redis_data:/data
+
+  # ── add-on: the feature-proof services (--profile proof; ADR-0127 D1) ────
+  # What tests/e2e/hello needs beside the app Postgres and the infisical profile
+  # (whose three services carry this profile too). Nothing here is reachable
+  # off-box: every published port binds 127.0.0.1, and the only credential is
+  # the ssh keypair scripts/oss/proof_seed.py generates into .proof/ (gitignored).
+  #
+  # sshd — the `remote/run` target for the SSH legs. Key-only (PASSWORD_ACCESS
+  # off, no sudo), the public key read from the seeded file; the matching
+  # private key is what the proof passes to the operator.
+  sshd:
+    image: linuxserver/openssh-server:10.3_p1-r1-ls239
+    profiles: ["proof"]
+    restart: unless-stopped
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      USER_NAME: ${PROOF_SSH_USER:-cairn}
+      PASSWORD_ACCESS: "false"
+      SUDO_ACCESS: "false"
+      LOG_STDOUT: "true"
+      PUBLIC_KEY_FILE: /keys/proof_ed25519.pub
+    volumes:
+      - ./.proof/ssh:/keys:ro
+    ports:
+      - "127.0.0.1:${PROOF_SSH_PORT:-2222}:2222"
+
+  # pg-proxy — a loopback relay to the app Postgres. The matrix runs cairn-server
+  # on the HOST (a real subprocess per cell) and points its Postgres cells here;
+  # the default stack keeps `postgres` unpublished, so the relay lives in this
+  # profile instead of a `ports:` on the default service.
+  pg-proxy:
+    image: alpine/socat:1.8.0.3
+    profiles: ["proof"]
+    restart: unless-stopped
+    command: ["tcp-listen:5432,fork,reuseaddr", "tcp-connect:postgres:5432"]
+    ports:
+      - "127.0.0.1:${PROOF_PG_PORT:-55432}:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  cairn_data:
+  caddy_data:
+  caddy_config:
+  pgbackups:
+  infisical_db_data:
+  infisical_redis_data:

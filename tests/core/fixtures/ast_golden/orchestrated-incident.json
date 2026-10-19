@@ -1,0 +1,115 @@
+{
+  "budget": null,
+  "critique": null,
+  "description": "Demo entry point. Composes the kept incident templates via subgraph_node:\n  1. classify        \u2014 small LLM classification step (no tools)\n  2. incident-rca    \u2014 subgraph: deterministic gather \u2192 RCA synthesis\n  3. post-incident-postmortem \u2014 subgraph: draft + persist to disk\nThree template hops, four operator packs underneath, zero domain-pack\nPython (\u00a724.21.1 narrative).\n",
+  "evals": null,
+  "flow": {
+    "nodes": {
+      "classify": {
+        "capabilities": [],
+        "knowledge": [],
+        "max_iterations": 8,
+        "model": "gpt-4o-mini",
+        "output_schema": null,
+        "prompt_section": "classify",
+        "retry": null,
+        "type": "prompt"
+      }
+    },
+    "root": {
+      "children": [
+        {
+          "ref": "classify",
+          "type": "action"
+        },
+        {
+          "inputs": {
+            "service": "service",
+            "source": "source",
+            "started_at": "started_at",
+            "symptom": "symptom",
+            "user_message": "user_message"
+          },
+          "outputs": {
+            "blast_radius": "rca_blast_radius",
+            "evidence": "rca_evidence",
+            "root_cause": "rca_root_cause",
+            "suggested_actions": "rca_suggested_actions",
+            "symptom": "rca_symptom",
+            "timeline": "rca_timeline"
+          },
+          "template": "incident-rca",
+          "type": "subgraph_node"
+        },
+        {
+          "config": {},
+          "function": "explode_root_cause",
+          "outputs": [
+            "root_cause_description",
+            "root_cause_service",
+            "root_cause_confidence",
+            "root_cause_category"
+          ],
+          "type": "python_node"
+        },
+        {
+          "config": {},
+          "function": "explode_timeline",
+          "outputs": [
+            "chronology"
+          ],
+          "type": "python_node"
+        },
+        {
+          "inputs": {
+            "blast_radius": "rca_blast_radius",
+            "chronology": "chronology",
+            "evidence": "rca_evidence",
+            "notion_page_id": "notion_page_id",
+            "root_cause_category": "root_cause_category",
+            "root_cause_confidence": "root_cause_confidence",
+            "root_cause_description": "root_cause_description",
+            "root_cause_service": "root_cause_service",
+            "run_id": "source",
+            "service": "service",
+            "symptom": "rca_symptom",
+            "title": "symptom"
+          },
+          "outputs": {
+            "bytes": "postmortem_bytes",
+            "ok": "postmortem_ok",
+            "path": "postmortem_path"
+          },
+          "template": "post-incident-postmortem",
+          "type": "subgraph_node"
+        }
+      ],
+      "type": "sequence"
+    },
+    "source": "behavior_tree",
+    "type": "state_machine"
+  },
+  "input_schema": "schema://incident/AlertContext",
+  "knowledge": [],
+  "models": null,
+  "module": "investigate",
+  "name": "orchestrated-incident",
+  "output": {
+    "format": "structured_json",
+    "schema_name": "PostmortemResult"
+  },
+  "output_schema": "schema://incident/PostmortemResult",
+  "tags": [
+    "flow:state_machine",
+    "flow:operation-driven",
+    "composition:subgraph",
+    "cost:medium"
+  ],
+  "tools": {
+    "dynamic": [],
+    "forbidden": [],
+    "required": [],
+    "tool_k": 5
+  },
+  "version": "2.0.0"
+}

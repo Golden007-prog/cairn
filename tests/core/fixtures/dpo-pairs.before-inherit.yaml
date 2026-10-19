@@ -1,0 +1,35 @@
+# pipelines/dpo-pairs.yaml — ONE CPU leg: measure answers → DPO preference
+# pairs in S3 (#1463 round 4). Runs BEFORE any GPU is started (owner rule:
+# GPU only when the train job is ready — this produces the train job's input).
+name: dpo-pairs
+kind: pipeline
+# 1M-campaign preference-pair generation (#1409)
+visibility: internal
+description: >
+  Mine DPO preference pairs (prompt/chosen/rejected) from a closed-book
+  measure's graded answers; export to S3 with lineage. CPU-only.
+
+inputs:
+  answers: {type: str, description: "Graded answers jsonl from a closedbook-measure run (s3:// or local)."}
+  name: {type: str, default: "dpo-pairs.jsonl", description: "Export filename."}
+  max_per_kind: {type: int, default: 0, description: "Cap per pair kind — abstain/correct/recall (0 = all)."}
+  seed: {type: int, default: 42}
+  register: {type: str, default: "", description: "Dataset-registry name to version this export under (#1466); empty = no registration."}
+
+governance:
+  budget: {usd: 1}
+  series: dpo-pairs
+
+steps:
+  - id: pairs
+    flow: dpo-pairs
+    with:
+      answers: $input.answers
+      name: $input.name
+      max_per_kind: $input.max_per_kind
+      seed: $input.seed
+      register: $input.register
+    produces: {export: Dataset}
+
+outputs:
+  pairs_uri: pairs.export

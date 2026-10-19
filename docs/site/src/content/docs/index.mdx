@@ -1,0 +1,99 @@
+---
+title: Overview
+description: A self-hosted engine for governed pipelines — data, agents, models and operations behind gates, budgets and an audit trail.
+---
+
+**cairn** is a self-hosted engine that runs your work as **governed
+pipelines**. A pipeline is a YAML file of legs: a check on a dataset, an
+agent that answers from your docs, a LoRA fine-tune, a job on a box you own.
+Every leg is its own recorded run, and the engine puts the same machinery
+around each one: gates answered by data or by a person, a budget, redaction,
+an audit trail, and recovery after a crash.
+
+The engine is domain-neutral. Everything that knows about a *domain* lives in
+a **pack** (data and a little glue); everything that touches a *tool* is an
+**operator** (a package with a stable capability name). A **profile** binds
+capabilities to operators per deployment.
+
+## What the engine adds around a piece of work
+
+- **Gates** — a [data gate](/features/gates/#data-gate) is a predicate over a
+  leg's output; a [person gate](/features/gates/#person-gate) pauses until
+  someone approves; an operator can declare its own gate, and a pipeline can
+  add a gate but never remove one.
+- **Policies** — the environment can require a person, or refuse a launch,
+  where the pipeline author put nothing. See [Governance](/features/governance/).
+- **Budgets** — a pipeline's ceiling is reserved at launch and settled at the
+  end; every model call is costed.
+- **Redaction and audit** — text can be redacted before it is stored or sent
+  to a model; an append-only, hash-chained log records what ran.
+- **Triggers and events** — schedules, dataset watches, webhooks, and one
+  pipeline's published event starting another. See
+  [Triggers and events](/features/triggers-and-events/).
+- **Recovery** — a gate survives a restart; a leg whose process died is found
+  and failed closed rather than run twice. See [Recovery](/features/recovery/).
+
+## The example: `hello-cairn`
+
+The repository ships one example pack, `examples/hello-cairn`, with four
+pipelines that together exercise every public feature. Every feature page
+takes its example from it.
+
+| Pipeline | Kind | What it does |
+|---|---|---|
+| `profile-and-publish` | data | Profile a dataset, stop unless it passes, redact, run a flow, stage, ask a person, tag, publish, audit. |
+| `ask-the-docs` | agentic | Retrieve from the pack's docs, ask a model, measure the answer with an MCP tool, remember it, ask a person. |
+| `nightly-ops` | operations | Check a secret, run a report on an SSH box, carry it through a flow, propose the follow-up to a person, audit it. |
+| `tiny-finetune` | ml | Profile training rows, LoRA fine-tune a small model on CPU, gate on held-out loss, tag it, ask a person, write its card. |
+
+## Surfaces
+
+- **CLI** — `cairn`: validate and explain pipelines, launch them, decide gates,
+  manage connections. See the [CLI reference](/reference/cli/).
+- **HTTP API** — `cairn-server`: the same launch door (`POST /start`), runs,
+  pipelines, gates and triggers.
+- **Python** — `cairn-client` for the API and `cairn-sdk` for authoring
+  pipelines in Python.
+
+The web console and the AI-assisted planner (Ask) are part of cairn-platform,
+not this repository.
+
+## Next
+
+<div class="card-grid">
+  <div class="card">
+
+  **[Quickstart](/quickstart/)** — install, start an engine, and run the
+  example's first pipeline.
+
+  </div>
+  <div class="card">
+
+  **[Pipelines](/features/pipelines/)** — the one runnable unit, and its
+  task, flow and template legs.
+
+  </div>
+  <div class="card">
+
+  **[Guides](/guides/data-to-assistant/)** — the features combined: data to an
+  assistant, a nightly job, a governed fine-tune, a crash.
+
+  </div>
+  <div class="card">
+
+  **[Architecture](/architecture/)** — the engine, packs, profiles, and the
+  path a launch takes.
+
+  </div>
+  <div class="card">
+
+  **[Deployment](/deployment/)** — the light compose stack and the Helm
+  chart.
+
+  </div>
+  <div class="card">
+
+  **[CLI reference](/reference/cli/)** — the `cairn` command surface.
+
+  </div>
+</div>

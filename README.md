@@ -66,19 +66,29 @@ work runs behind deterministic guardrails you can inspect afterward:
 
 ## Quickstart
 
-cairn is in **early access** — the source opens here shortly. Until then, the
-docs cover the full CLI, architecture, and governance model:
-
-- [Installation](https://docs.cairndev.sh/installation/) — extras (RAG, Temporal, Postgres, PII, telemetry) and the container image
-- [CLI reference](https://docs.cairndev.sh/reference/cli/) — every command
-- **[Join the waitlist](https://cairndev.sh)** for access
-
-Once released, a governed run looks like this:
+The engine ships as the `cairndev` distribution (import name `cairn`), with the builtin
+operator packs (14) and the core contracts (13) as sibling packages in
+this repository.
 
 ```bash
-uv run cairn preflight training/finetune -i job.json   # cost, gates, blockers — no spend
-uv run cairn run training/finetune --input job.json    # the governed run
+git clone https://github.com/cairndev-sh/cairn && cd cairn
+uv sync --extra dev
+uv run cairn --help
 ```
+
+A domain pack is a data wheel the engine discovers through an entry point; the example
+pack shows the shape, and a governed run is a declared pipeline:
+
+```bash
+CAIRN_PACK_PATH=examples/hello-cairn uv run cairn pipeline ls
+CAIRN_PACK_PATH=examples/hello-cairn uv run cairn pipeline explain hello-cairn/profile-and-publish
+```
+
+Those are the commands the public CI job runs on every change. The container image is
+built from `Dockerfile.engine`, the Helm chart lives under `deploy/helm/cairn`, and the
+optional extras are `auth`, `dev`, `hello`, `infisical`, `kernel`, `metaflow`, `nats`, `oauth`, `optuna`, `pii`, `rag`, `rag-pgvector`, `rag-pinecone`, `rag-qdrant`, `rag-sqlite-vec`, `runtime-dbos`, `runtime-postgres`, `runtime-sqlite`, `runtime-temporal`, `skypilot`, `ssh`, `storage-postgres`, `telemetry`, `train`.
+Full setup: [Installation](https://docs.cairndev.sh/installation/) ·
+[CLI reference](https://docs.cairndev.sh/reference/cli/).
 
 ## The ModelOps lifecycle
 
@@ -102,7 +112,7 @@ default. Promotion pauses for a human. Read the walkthrough in the
 
 ## One engine, many surfaces
 
-The same governed core is driven from four places:
+The same governed core is driven from three places:
 
 - **CLI** — the full control surface: run, preflight, replay, approve, deploy.
   → [CLI reference](https://docs.cairndev.sh/reference/cli/)
@@ -110,8 +120,6 @@ The same governed core is driven from four places:
   pipelines, configuration, policies, connections, and a sandboxed Playground.
 - **HTTP + SSE API** — everything the console does is a documented endpoint,
   including live run streaming. → [HTTP API](https://docs.cairndev.sh/reference/http-api/)
-- **`cairn ask`** — natural-language intent resolved into governed plans; a
-  read-only agent that never bypasses policy.
 
 ## Documentation
 
@@ -128,8 +136,9 @@ The same governed core is driven from four places:
 ## Status & license
 
 cairn is in **early access** and under active development. The API and command
-surface may still change between releases.
+surface may still change between releases; see [`CHANGELOG.md`](./CHANGELOG.md).
 
-The source opens here at release under the **Apache License 2.0** — see
-[`LICENSE`](./LICENSE). Interested in early access or a say in what ships
-next? **[Join the waitlist](https://cairndev.sh).**
+Licensed under the **Apache License 2.0** — see [`LICENSE`](./LICENSE).
+Contributions are welcome: read [`CONTRIBUTING.md`](./CONTRIBUTING.md) first.
+Interested in the managed cloud or a say in what ships next?
+**[Join the waitlist](https://cairndev.sh).**

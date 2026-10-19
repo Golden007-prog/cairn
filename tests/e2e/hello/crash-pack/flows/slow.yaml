@@ -1,0 +1,9 @@
+# flows/slow.yaml — one `noop.slow` stage on the builtin engine: a flow leg that is
+# RUNNING for `seconds`, long enough for test_crash.py to kill the server mid-leg.
+name: slow
+kind: data
+description: One slow no-op stage on the builtin dataflow engine, so a crash can land mid-leg.
+stages:
+  - stage: noop.slow
+    config:
+      seconds: 12

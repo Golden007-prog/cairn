@@ -1,0 +1,53 @@
+format = "cairn.contracts/1"
+
+[distribution]
+name = "cairn-contracts-dataflow"
+version = "1.1.0"
+
+[[definitions]]
+id = "dataflow.run"
+revision = "1.0.0"
+kind = "capability"
+path = "capabilities/dataflow.run.json"
+
+[[definitions]]
+id = "dataflow.run.input"
+revision = "1.0.0"
+kind = "schema"
+path = "schemas/dataflow.run.input.json"
+
+[[definitions]]
+id = "dataflow.run.configuration"
+revision = "1.0.0"
+kind = "schema"
+path = "schemas/dataflow.run.configuration.json"
+
+[[definitions]]
+id = "dataflow.run.output"
+revision = "1.0.0"
+kind = "schema"
+path = "schemas/dataflow.run.output.json"
+
+[[definitions]]
+id = "ml.run"
+revision = "1.0.0"
+kind = "capability"
+path = "capabilities/ml.run.json"
+
+[[definitions]]
+id = "ml.run.input"
+revision = "1.0.0"
+kind = "schema"
+path = "schemas/ml.run.input.json"
+
+[[definitions]]
+id = "ml.run.configuration"
+revision = "1.0.0"
+kind = "schema"
+path = "schemas/ml.run.configuration.json"
+
+[[definitions]]
+id = "ml.run.output"
+revision = "1.0.0"
+kind = "schema"
+path = "schemas/ml.run.output.json"

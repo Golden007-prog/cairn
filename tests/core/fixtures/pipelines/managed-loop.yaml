@@ -1,0 +1,562 @@
+# fixtures/pipelines/managed-loop.yaml — RETIRED from the training pack (#2175); kept as a
+# fixture because it is the only def declaring serve legs (#1788) and two finalizers
+# (ADR-0097), which `test_serve_leg_pipeline` and `test_pipeline_finalizer` pin.
+# Was `continual-learning-managed.yaml` — the #1787 pattern on the flagship.
+#
+# Same cadence as `retrain-cycle.yaml`, with the COMPUTE LIFECYCLE made part
+# of the record instead of part of the operator's memory:
+#
+#   plan-cost   → estimate what the cycles will cost, before anything is on
+#   authorize   → a HUMAN gate showing $/hr, the estimate and the lease length.
+#                 It sits in front of `acquire`, so nothing is powered on until
+#                 someone with the `approvers:` audience says so.
+#   acquire     → compute/acquire starts the box the connection names, waits for
+#                 SSH, stamps a `cairn:release-after` lease (max_hours)
+#   cycle       → the bounded loop, now with its SERVING lifecycle in it (#1788):
+#                 serve-champion → champion sweep → train → approve-serving →
+#                 serve-challenger → challenger sweep. Each serve leg starts the
+#                 server ON the acquired box, proves it answers a real completion,
+#                 and publishes an `endpoint_url` the eval legs wire — deleting
+#                 two hand-pasted endpoint inputs and the whole tunnel procedure.
+#   stop-serving → serve/stop, `finalizer: true`
+#   release     → compute/release, declared `finalizer: true`, so the bridge runs
+#                 it when the pipeline reaches ANY terminal state — done, failed,
+#                 or cancelled — the way `finally:` runs (ADR-0097)
+#
+# ── WHY THE ENDPOINT IS REACHABLE (#1788, ADR-0098) ──────────────────────────
+# The eval legs run where the bridge runs; the server runs on the GPU box. The
+# serve leg owns an SSH `-L` tunnel for its own lifetime and publishes the LOCAL
+# end as `endpoint_url` — the same thing every flagship session did by hand in a
+# spare terminal, now on the record and torn down by `stop-serving`. Set
+# `serve_bind_host` to the docker bridge gateway when eval workers run in
+# containers on the control-plane host.
+#
+# Why this is a SEPARATE file and not an edit to the flagship: #1776 is open
+# against `retrain-cycle.yaml` (the flagship-trained adapter scores far
+# below the experiment's on the same recipe), and changing the def under an open
+# investigation would make its next run incomparable to the ones already
+# measured. When #1776 closes, the flagship adopts this shape and this file
+# becomes the flagship.
+#
+# ── WHAT BINDS TO THE ACQUIRED BOX, honestly ─────────────────────────────────
+# `acquire.target` is the connection NAME, and it is wired into `release` and
+# shown at the gate so the record says which box this run powered on. It is not
+# a per-leg compute override, because none exists yet: a `flow:` leg's compute
+# target comes from the ENVIRONMENT (`ml_target` / `dataflow_target`, resolved by
+# `_leg_target`), and a `task:` leg carries no compute binding at all (#1459).
+# So the contract this file relies on, and states rather than implies:
+#
+#     `compute_connection` MUST name the same connection the environment's
+#     `ml_target` selects.
+#
+# `cairn pipeline explain <ref>` prints both — the acquire leg's connection and
+# each flow leg's resolved compute target — so the mismatch is one command away
+# rather than a surprise at dispatch. Making a leg bind `$steps.acquire.target`
+# directly is the natural next slice (it needs a per-step compute override in the
+# leg grammar); wiring it here as if it worked would be exactly the kind of
+# reads-as-configured-does-nothing knob #1675 taught us to refuse.
+name: managed-loop
+kind: pipeline
+description: >
+  The continual-learning cadence with its compute lifecycle governed: an
+  authorization gate showing the hourly rate and the estimate, then
+  compute/acquire to power the box on, the bounded cycle, and compute/release as
+  a finalizer so the box is stopped on success, on failure and on cancel alike.
+
+inputs:
+  # ── the compute lifecycle (#1787) ─────────────────────────────────────────
+  compute_connection:
+    type: str
+    description: >
+      Name of the `compute.ssh` connection to power on for this run. Its
+      `instance_id` / `region` / `hourly_usd` config carries the rest (add them
+      with `cairn connect ssh --name <n> --set instance_id=i-… --set region=…
+      --set hourly_usd=0.66`). MUST be the same connection the environment's
+      `ml_target` selects — see the header.
+  max_hours:
+    type: float
+    default: 6.0
+    description: >
+      Lease length. Stamps a `cairn:release-after` deadline TAG on the instance,
+      which `cairn compute sweep --apply` enforces from any host with
+      credentials — so the box cannot outlive a crashed control plane. It is a
+      watchdog, not instance-side enforcement: the sweep runs when a cron runs
+      it. Set it to the longest the whole cadence could honestly take.
+  wait_ready_s:
+    type: float
+    default: 600.0
+    description: "Bounded wait for the box's SSH port after start."
+
+  # ── the cost the authorization gate shows ─────────────────────────────────
+  # `compute/quote` is not used here: it reads live provider prices off
+  # `ctx.compute`, and a pipeline TASK leg carries no compute binding (#1459), so
+  # it would show the approver a null. `compute/estimate` is pure, needs no
+  # connection, and prices exactly what this pipeline is about to do.
+  est_gpu: {type: str, default: "T4", description: "GPU the box carries — drives the estimate's VRAM fit + $/hr."}
+  est_rows: {type: int, default: 1000, description: "Rows per cycle, for the estimate."}
+  est_cycles: {type: int, default: 6, description: "Cycles the estimate should price (match `max_iterations`)."}
+
+  # ── the capture window ────────────────────────────────────────────────────
+  dataset: {type: str, description: "The cycle's FRESH signal: a governed dataset append (path or resolved URI)."}
+  min_new_rows: {type: int, default: 200, description: "readiness bar: fewer surviving rows than this and the cycle STOPS before any paid compute."}
+  pii_backend: {type: str, default: "duckdb", description: "Redaction backend for the hygiene leg."}
+
+  # ── replay (ADR-0095 §2.3) ────────────────────────────────────────────────
+  replay_sources: {type: list, default: [], description: "Prior-cycle train slices, OLDEST first."}
+  replay_ratio: {type: float, default: 0.2, description: "Replay share of the MIX (denominator = output rows)."}
+  replay_strategy: {type: str, default: "uniform", description: "uniform | recency_weighted."}
+  replay_seed: {type: int, default: 0, description: "Same inputs + same seed → byte-identical mix."}
+  replay_out_path: {type: str, description: "Where each cycle writes its mixed train slice."}
+
+  # ── the train rung ────────────────────────────────────────────────────────
+  base_model: {type: str, default: "Qwen/Qwen2.5-1.5B-Instruct"}
+  accept_license: {type: bool, default: false, description: "Required true when base_model is a gated catalog entry (#2027, ADR-0102 D5); ignored otherwise."}
+  base_adapter: {type: str, default: "", description: "The adapter cycle 1 continues from; empty = the bare base."}
+  method: {type: str, default: "qlora", description: "PEFT method for the SFT rung (qlora|lora)."}
+  output_name: {type: str, default: "continual-candidate"}
+  max_steps: {type: int, default: 400}
+  learning_rate: {type: float, default: 0.0002}
+  max_eval_loss: {type: float, default: 0}
+  packing: {type: bool, default: true, description: "MUST match the prior cycle (ADR-0095 ruling 7)."}
+  stub: {type: bool, default: false, description: "Hermetic trainer (no torch) — the conformance tier."}
+  report_to: {type: list, default: [mlflow]}
+
+  # ── the rest of TrainSpec (ADR-0102 D2, #2023) ────────────────────────────
+  # Same block as `continual-learning`: ruling 7 (ADR-0095 Amendment 3) asks a
+  # cycle to MATCH the prior one's hyperparameters, which needs them exposed.
+  # Every default is the trainer's own, so an existing cadence is unchanged.
+  lora_r: {type: int, default: 16, description: "LoRA rank. MUST match the prior cycle when continuing its adapter."}
+  lora_alpha: {type: int, default: 16, description: "LoRA alpha (scaling). MUST match the prior cycle."}
+  target_modules: {type: str, default: "", description: "Comma-separated LoRA targets. Empty = the trainer's default. MUST match the prior cycle."}
+  epochs: {type: float, default: 1.0, description: "Passes over the mix (ignored while max_steps > 0)."}
+  max_seq_len: {type: int, default: 2048, description: "Tokens per training sequence."}
+  eval_split: {type: float, default: 0.1, description: "Fraction of the mix held out for mid-training eval."}
+  seed: {type: int, default: 42, description: "Training seed (distinct from replay_seed, which fixes the MIX)."}
+  eval_steps: {type: int, default: 50, description: "Evaluate every N steps (0 = epoch-end)."}
+  save_steps: {type: int, default: 50, description: "Checkpoint every N steps; a restart resumes from the last one."}
+  save_total_limit: {type: int, default: 2, description: "Keep only the N most-recent checkpoints (0 = unbounded)."}
+  validate_pipeline: {type: bool, default: false, description: "Run the whole training path on CPU with a tiny model first — zero GPU spend."}
+  gpu: {type: str, default: "T4", description: "GPU type the backend provisions (T4, A10G, A100, …)."}
+  artifact_target: {type: str, default: "hf", description: "Where the adapter is persisted: hf | local | s3."}
+  hf_repo: {type: str, default: "", description: "HF Hub repo id for artifact_target=hf; empty = derived from output_name."}
+  registered_model_name: {type: str, default: "", description: "MLflow Registered Model for each cycle's adapter (empty = none)."}
+  tracking_project: {type: str, default: "continual-learning", description: "MLflow experiment / W&B project."}
+  tracking_run_name: {type: str, default: "", description: "Tracking run name (empty = from output_name)."}
+  extra: {type: dict, default: {}, description: "Backend/trainer passthrough."}
+
+  # ── the SERVING lifecycle (#1788) ─────────────────────────────────────────
+  # These replace the two hand-pasted endpoints below AND the entire tunnel
+  # procedure. The serve legs run on the box `acquire` powered on, and publish an
+  # `endpoint_url` that is reachable from where the eval legs actually run.
+  serve_backend:
+    type: str
+    default: hf-shim
+    description: >
+      `hf-shim` = the FIDELITY backend: one process, the training-time 4-bit
+      base, adapters addressed by model id, champion via `disable_adapter()`
+      (ADR-0095 Am.2 ruling 1). `vllm` serves the LoRA over vLLM's own base load
+      and its numbers MAY DIVERGE — use it for production serving, not for a
+      continual-learning measurement.
+  serve_port: {type: int, default: 8600, description: "Port the server binds on the box (loopback only)."}
+  serve_bind_host:
+    type: str
+    default: "127.0.0.1"
+    description: >
+      Address the leg's SSH tunnel binds on the CONTROL-PLANE host — the one the
+      published endpoint_url names. `127.0.0.1` when eval legs run in the
+      bridge's own process; the docker bridge gateway (e.g. `172.18.0.1`) when
+      they run in containers on that host, which is what the flagship sessions
+      set by hand.
+  serve_python_bin:
+    type: str
+    default: python3
+    description: "Interpreter on the box carrying torch/transformers/peft (the campaign box: /opt/pytorch/bin/python3)."
+  champion_adapters:
+    type: dict
+    default: {}
+    description: >
+      model id → adapter URI for the standing CHAMPION side. Empty (the default)
+      means the champion IS the bare base, served under `base_model_id` — which
+      is what cycle 1 measures. From cycle 2 on, set it to the promoted adapter,
+      e.g. `{cl-cycle1: s3://…/cl-cycle1}`.
+  base_model_id:
+    type: str
+    default: base
+    description: "Model id the UN-ADAPTED base answers to, from the same loaded weights."
+
+  # ── the measurement harness ───────────────────────────────────────────────
+  eval_set: {type: str, description: "The held-out QA corpus, split-labelled, that BOTH measurements ask."}
+  champion_model:
+    type: str
+    default: base
+    description: >
+      Model id the champion measurement asks for. Defaults to the base id, which
+      is correct while `champion_adapters` is empty; set it to the promoted
+      adapter's id once that map is populated.
+  challenger_model: {type: str, default: "cairn-challenger"}
+
+  # ── DEPRECATED (#1788 criterion 6) ────────────────────────────────────────
+  # Superseded by the serve legs, and now OPTIONAL rather than required: an
+  # existing launch that still passes them keeps working unchanged, because the
+  # eval legs take `$default($input.<x>_endpoint, $steps.serve-<x>.endpoint_url)`
+  # — the hand-pasted value WINS when one is given, so a run pointed at an
+  # endpoint somebody already has up behaves exactly as it did before.
+  #
+  # `default: null`, NOT `""` — `$default` falls back on missing-or-null only,
+  # and an empty string is a real value it would hand straight to the harness
+  # (#1728, which broke a dress rehearsal).
+  #
+  # They will be removed once #1776 closes and the flagship adopts this file.
+  champion_endpoint:
+    type: str
+    default: null
+    description: "DEPRECATED (#1788): endpoint serving the CHAMPION. Unset = the serve-champion leg's endpoint."
+  challenger_endpoint:
+    type: str
+    default: null
+    description: "DEPRECATED (#1788): endpoint serving the newly trained adapter. Unset = the serve-challenger leg's endpoint."
+  judge_model: {type: str, default: "deepseek/deepseek-v4-pro", description: "Judge-scored gains are untrusted_metric."}
+  max_per_split: {type: int, default: 0, description: "Cost guard on the two eval legs (0 = every question)."}
+
+  # ── the two verdicts ──────────────────────────────────────────────────────
+  delta_thresholds:
+    type: dict
+    default:
+      max_regression_pct: 2.0
+      warn_regression_pct: 0.5
+      require_metrics: [eval_closedbook_eval_acc]
+      directions:
+        eval_closedbook_eval_halluc_rate: lower_better
+        eval_closedbook_paraphrase_eval_halluc_rate: lower_better
+        eval_closedbook_control_halluc_rate: lower_better
+    description: "eval/delta's regression budget plus the direction overrides."
+  forgetting_metrics: {type: list, default: [eval_closedbook_control_acc]}
+  forgetting_tolerance: {type: float, default: 0.02}
+  forgetting_directions: {type: dict, default: {}}
+  max_error_rate: {type: float, default: 0.0, description: "Highest per-split error_rate either measurement may carry and still count as valid."}
+
+governance:
+  budget: {usd: 300}
+  series: retrain-cycle
+  approvers: ml-leads
+
+steps:
+  # ── 1. what is this about to cost? ───────────────────────────────────────
+  # Pure and replayable — no GPU, no live API, no connection. It exists so the
+  # gate below shows a NUMBER rather than asking a human to authorize "some
+  # compute". `epochs` prices the whole cadence: est_cycles × one cycle.
+  - id: plan-cost
+    task: compute/estimate
+    with:
+      base_model: $input.base_model
+      dataset_rows: $input.est_rows
+      method: $input.method
+      max_steps: $input.max_steps
+      epochs: $input.est_cycles
+      gpu: $input.est_gpu
+
+  # ── 2. THE AUTHORIZATION GATE ────────────────────────────────────────────
+  # An ordinary `gate:` leg — no new gate machinery, which is the point (#1787).
+  # What is new is that it sits in FRONT of the leg that turns a paid box on, so
+  # "GPU only with authorization" is a property of the plan instead of a rule in
+  # someone's head. It pauses the pipeline (`awaiting_approval`); the approver,
+  # the audience and every field below land on the record, and either
+  # `cairn remote advance` or `POST /pipelines/{id}/steps/{step}/approve`
+  # releases it.
+  #
+  # `show:` entries are resolved by a plain path walk, so a task leg's fields are
+  # named directly (no `findings.` prefix) and a nested key is spelled out.
+  - gate: authorize-compute
+    depends_on: [plan-cost]
+    approvers: ml-leads
+    timeout: 3d
+    show:
+      - plan-cost.assumptions.price_per_hr   # $/hr the estimate priced against
+      - plan-cost.usd                        # estimated total for est_cycles
+      - plan-cost.gpu_hours
+      - plan-cost.fits                       # false = this will not fit the GPU
+      - plan-cost.vram_gb
+      - plan-cost.gpu_vram_gb
+
+  # ── 3. power the box on ──────────────────────────────────────────────────
+  # `risk: paid_compute`. This is the call that starts billing, and the gate
+  # above is what a human answered to allow it. `max_hours` stamps the lease tag
+  # the sweep enforces — see the input's description for what that does and does
+  # not guarantee.
+  - id: acquire
+    task: compute/acquire
+    depends_on: [authorize-compute]
+    with:
+      connection: $input.compute_connection
+      max_hours: $input.max_hours
+      wait_ready_s: $input.wait_ready_s
+
+  # ── 4. the cadence, unchanged from the flagship ──────────────────────────
+  - loop: cycle
+    depends_on: [acquire]
+    max_iterations: 6
+    on_exhausted: gate
+    until: 'delta.verdict != "pass"'
+    steps:
+      - id: readiness
+        flow: readiness
+        with:
+          raw: $input.dataset
+          pii_backend: $input.pii_backend
+        produces: {export: Dataset}
+
+      - gate: enough-signal
+        depends_on: [readiness]
+        predicate: steps.readiness.findings.dedup_exact_rows >= input.min_new_rows
+
+      # ── serve the CHAMPION (#1788) ───────────────────────────────────────
+      # The first of the cycle's two server lifetimes. It carries the base id
+      # plus whatever standing adapters `champion_adapters` names, launches on
+      # the box `acquire` powered on, and is not `done` until it has answered a
+      # REAL completion through the tunnel it opened — so a champion sweep that
+      # starts is a champion sweep that can reach its endpoint.
+      - id: serve-champion
+        task: serve/start
+        depends_on: [enough-signal]
+        with:
+          target: $steps.acquire.target
+          backend: $input.serve_backend
+          base_model: $input.base_model
+          base_model_id: $input.base_model_id
+          adapters: $input.champion_adapters
+          port: $input.serve_port
+          bind_host: $input.serve_bind_host
+          python_bin: $input.serve_python_bin
+
+      - id: champion
+        flow: closedbook-eval
+        depends_on: [serve-champion]
+        with:
+          qa: $input.eval_set
+          # The serve leg's output, with the DEPRECATED input still winning when
+          # a launch supplies one (criterion 6). `$default` falls back on
+          # missing-or-null, which is why that input defaults to `null`.
+          endpoint_url: "$default($input.champion_endpoint, $steps.serve-champion.endpoint_url)"
+          model: $input.champion_model
+          judge_model: $input.judge_model
+          max_per_split: $input.max_per_split
+          tag: champion
+
+      - id: replay
+        task: dataset/replay
+        depends_on: [enough-signal]
+        with:
+          new_rows_path: $steps.readiness.export
+          out_path: $input.replay_out_path
+          sources: $input.replay_sources
+          ratio: $input.replay_ratio
+          strategy: $input.replay_strategy
+          seed: $input.replay_seed
+        consumes: {new_rows_path: Dataset}
+
+      - id: train
+        flow: sft-train
+        depends_on: [replay]
+        with:
+          dataset_uri: $steps.replay.out_path
+          init_adapter_uri: "$default($steps.train.train_qlora_adapter_uri, $input.base_adapter)"
+          base_model: $input.base_model
+          method: $input.method
+          output_name: $input.output_name
+          max_steps: $input.max_steps
+          learning_rate: $input.learning_rate
+          max_eval_loss: $input.max_eval_loss
+          packing: $input.packing
+          stub: $input.stub
+          report_to: $input.report_to
+          # #2023 — the rest of TrainSpec. `tracking_project` keeps the value
+          # this leg hard-coded, now as the input's default.
+          tracking_project: $input.tracking_project
+          tracking_run_name: $input.tracking_run_name
+          epochs: $input.epochs
+          lora_r: $input.lora_r
+          lora_alpha: $input.lora_alpha
+          target_modules: $input.target_modules
+          max_seq_len: $input.max_seq_len
+          eval_split: $input.eval_split
+          seed: $input.seed
+          eval_steps: $input.eval_steps
+          save_steps: $input.save_steps
+          save_total_limit: $input.save_total_limit
+          validate_pipeline: $input.validate_pipeline
+          gpu: $input.gpu
+          artifact_target: $input.artifact_target
+          hf_repo: $input.hf_repo
+          registered_model_name: $input.registered_model_name
+          extra: $input.extra
+        consumes: {dataset_uri: Dataset}
+        produces: {adapter: Model, metrics: Report}
+
+      # ── APPROVE THE SERVING CONFIG (#1788) ───────────────────────────────
+      # This gate used to mean "a human SSHes to the box and starts a shim"
+      # (#1459 recorded it as temporary). It now means what a gate should: a
+      # person reads the configuration that is ABOUT to be served and says yes.
+      # The `show:` block is the serving config — which adapter URI, under which
+      # model id, on which box, with which backend — so the approver can see
+      # that the thing being measured is the thing that was just trained.
+      # Approving it releases `serve-challenger`, the leg that starts the server.
+      - gate: approve-serving
+        depends_on: [train]
+        approvers: ml-leads
+        show:
+          - train.findings.train_qlora_adapter_uri   # what will be served
+          - train.findings.train_qlora_train_loss
+          - train.findings.train_qlora_eval_loss
+          - train.findings.train_qlora_steps
+          - acquire.target                           # on which box
+          - serve-champion.backend_used              # with which backend
+          - serve-champion.model_ids                 # the ids already up
+          - serve-champion.endpoint_url
+          - replay.out_path
+          - replay.total_rows
+
+      # ── serve the CHALLENGER — ONE server, ALL the ids ───────────────────
+      # Same `port` as serve-champion, so this REPLACES that server rather than
+      # stacking a second one on the same GPU (one GPU holds one base; #708).
+      # The restart is forced, not chosen: the challenger adapter does not exist
+      # until `train` has run, so no single server lifetime can span both
+      # measurements of a cycle.
+      #
+      # What IS achieved is the layout ADR-0095 §2.5 asks for: this server
+      # carries the base id, every standing champion adapter, AND the new
+      # challenger — one process, one base load, ids selected per request. So
+      # champion and challenger are addressable from one server, and a
+      # re-measure of the champion needs no further restart.
+      #
+      # The honest limit: within a cycle the champion sweep ran against the
+      # PREVIOUS lifetime — same base string, same backend, same operator, but
+      # not literally the same process. A measurement that needs one process for
+      # both moves the `champion` leg to depend on this step instead; the only
+      # change is one `depends_on` and one wire.
+      - id: serve-challenger
+        task: serve/start
+        depends_on: [approve-serving]
+        with:
+          target: $steps.acquire.target
+          backend: $input.serve_backend
+          base_model: $input.base_model
+          base_model_id: $input.base_model_id
+          adapters: $input.champion_adapters
+          adapter_id: $input.challenger_model
+          adapter_uri: $steps.train.train_qlora_adapter_uri
+          port: $input.serve_port
+          bind_host: $input.serve_bind_host
+          python_bin: $input.serve_python_bin
+
+      - id: challenger
+        flow: closedbook-eval
+        depends_on: [serve-challenger]
+        with:
+          qa: $input.eval_set
+          endpoint_url: "$default($input.challenger_endpoint, $steps.serve-challenger.endpoint_url)"
+          model: $input.challenger_model
+          judge_model: $input.judge_model
+          max_per_split: $input.max_per_split
+          tag: challenger
+
+      - gate: measurement-valid
+        depends_on: [champion, challenger]
+        predicate: >
+          steps.champion.findings.eval_closedbook_eval_error_rate <= input.max_error_rate &&
+          steps.champion.findings.eval_closedbook_paraphrase_eval_error_rate <= input.max_error_rate &&
+          steps.champion.findings.eval_closedbook_control_error_rate <= input.max_error_rate &&
+          steps.challenger.findings.eval_closedbook_eval_error_rate <= input.max_error_rate &&
+          steps.challenger.findings.eval_closedbook_paraphrase_eval_error_rate <= input.max_error_rate &&
+          steps.challenger.findings.eval_closedbook_control_error_rate <= input.max_error_rate
+
+      - id: delta
+        task: eval/delta
+        depends_on: [measurement-valid]
+        with:
+          candidate: $steps.challenger.findings
+          baseline: $steps.champion.findings
+          thresholds: $input.delta_thresholds
+
+      - id: forgetting
+        task: eval/forgetting
+        depends_on: [measurement-valid]
+        with:
+          previous: $steps.champion.findings
+          current: $steps.challenger.findings
+          metrics: $input.forgetting_metrics
+          tolerance: $input.forgetting_tolerance
+          directions: $input.forgetting_directions
+
+      - gate: no-regression
+        depends_on: [delta]
+        predicate: steps.delta.verdict == 'pass' || steps.delta.verdict == 'warn'
+
+      - gate: no-forgetting
+        depends_on: [forgetting]
+        predicate: steps.forgetting.passed
+
+      - gate: promote-adapter
+        depends_on: [no-regression, no-forgetting]
+        show:
+          - train.findings.train_qlora_adapter_uri
+          - champion.findings.eval_closedbook_eval_acc
+          - challenger.findings.eval_closedbook_eval_acc
+          - champion.findings.eval_closedbook_eval_halluc_rate
+          - challenger.findings.eval_closedbook_eval_halluc_rate
+          - champion.findings.eval_closedbook_control_acc
+          - challenger.findings.eval_closedbook_control_acc
+          - champion.findings.eval_closedbook_control_abstain_rate
+          - challenger.findings.eval_closedbook_control_abstain_rate
+          - challenger.findings.eval_closedbook_judge_model
+          - delta.verdict
+          - delta.blocking
+          - forgetting.forgetting
+          - forgetting.backward_transfer
+          - replay.ratio_actual
+          - replay.mix
+
+  # ── 5. THE TEARDOWN — `finally:`, as a leg ───────────────────────────────
+  # `finalizer: true` is the one genuinely new engine behaviour in #1787: the
+  # bridge runs this step when the pipeline reaches ANY terminal state (done,
+  # failed, cancelled), exactly once, even if the chain above never got past the
+  # gate. The record only becomes terminal once this has settled, which is also
+  # what makes it survive a control-plane restart — a bridge that comes back up
+  # still sees the pipeline as `running` and still owes the teardown.
+  #
+  # Its input is `$input.compute_connection`, NOT `$steps.acquire.target`, and
+  # deliberately: a finalizer must be resolvable even when acquire never ran, and
+  # an input wire always is. `compute/release` is idempotent — stopping an
+  # already-stopped instance is a no-op success — which is what allows the bridge
+  # to re-run it after a crash rather than parking it for a human while the box
+  # bills.
+  # #1788 — the serving teardown, on the SAME engine feature. Declared BEFORE
+  # `release` so the plan order reads the way the teardown runs: stop the server,
+  # then power the box down. (Finalizers are submitted in plan order; each is
+  # independently guaranteed, so neither depends on the other having succeeded.)
+  #
+  # Wired off `$input`, never off `$steps.serve-*`, for ADR-0097's reason: a
+  # finalizer must be resolvable even when its producer never ran. `(target,
+  # port)` is the whole address `serve/stop` needs — which is exactly why the
+  # server's workdir on the box is keyed by port rather than by model name.
+  # Stopping nothing is a no-op success, so a cycle that never reached the serve
+  # leg still terminates cleanly.
+  - id: stop-serving
+    task: serve/stop
+    finalizer: true
+    with:
+      target: $input.compute_connection
+      port: $input.serve_port
+
+  - id: release
+    task: compute/release
+    finalizer: true
+    with:
+      connection: $input.compute_connection
+
+# The chain's head after the final cycle.
+outputs:
+  adapter_uri: train.train_qlora_adapter_uri
+  cycle_verdict: delta.verdict
+  challenger_endpoint_used: serve-challenger.endpoint_url
+  served_model_ids: serve-challenger.model_ids
+  released_instance: release.instance_id

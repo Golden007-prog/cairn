@@ -1,0 +1,9 @@
+{
+  "format": "cairn.capability/1",
+  "id": "artifact.promote",
+  "revision": "1.0.0",
+  "summary": "Point a governed tag at a registered artifact and record what it displaced (the rollback target). Declares requires_approval: the tag moves only after a human approves.",
+  "input": "contract://artifact.promote.input/1.0.0",
+  "configuration": "contract://artifact.promote.configuration/1.0.0",
+  "output": "contract://artifact.promote.output/1.0.0"
+}

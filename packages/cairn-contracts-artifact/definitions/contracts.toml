@@ -1,0 +1,29 @@
+format = "cairn.contracts/1"
+
+[distribution]
+name = "cairn-contracts-artifact"
+version = "1.0.0"
+
+[[definitions]]
+id = "artifact.promote"
+revision = "1.0.0"
+kind = "capability"
+path = "capabilities/artifact.promote.json"
+
+[[definitions]]
+id = "artifact.promote.input"
+revision = "1.0.0"
+kind = "schema"
+path = "schemas/artifact.promote.input.json"
+
+[[definitions]]
+id = "artifact.promote.configuration"
+revision = "1.0.0"
+kind = "schema"
+path = "schemas/artifact.promote.configuration.json"
+
+[[definitions]]
+id = "artifact.promote.output"
+revision = "1.0.0"
+kind = "schema"
+path = "schemas/artifact.promote.output.json"

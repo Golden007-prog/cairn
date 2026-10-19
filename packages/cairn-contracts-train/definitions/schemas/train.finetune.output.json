@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contract://train.finetune.output/1.0.0",
+  "description": "Scalars and a path: the adapter's weights never appear here.",
+  "properties": {
+    "adapter_path": {"description": "Directory holding the saved LoRA adapter.", "title": "Adapter Path", "type": "string"},
+    "train_loss": {"description": "Mean training loss over the steps run.", "title": "Train Loss", "type": "number"},
+    "eval_loss": {
+      "anyOf": [{"type": "number"}, {"type": "null"}],
+      "default": null,
+      "description": "Mean loss on the held-out rows; null when too few rows to hold any out.",
+      "title": "Eval Loss"
+    },
+    "tokens_seen": {"description": "Non-padding tokens the optimizer trained on.", "title": "Tokens Seen", "type": "integer"},
+    "steps_run": {"description": "Optimizer steps actually run.", "title": "Steps Run", "type": "integer"},
+    "base_model": {"description": "The base model the adapter was trained on.", "title": "Base Model", "type": "string"},
+    "elapsed_s": {"description": "Wall-clock seconds the fine-tune took.", "title": "Elapsed S", "type": "number"}
+  },
+  "required": ["adapter_path", "train_loss", "tokens_seen", "steps_run", "base_model", "elapsed_s"],
+  "title": "TrainLoraOutput",
+  "type": "object"
+}

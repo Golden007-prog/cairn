@@ -1,0 +1,68 @@
+{{- if .Values.profiles.backup.enabled }}
+{{/*
+compose `--profile backup` (#391) — nightly pg_dump, keeping the last N.
+Compose runs a `while true; sleep` container because compose has no scheduler;
+Kubernetes does, so this is a CronJob. Same dump, same retention, one fewer
+always-running container.
+*/}}
+{{- if not .Values.postgres.enabled }}
+{{- fail "profiles.backup with postgres.enabled=false — a managed Postgres has its own backups; back it up there, not from a pod that only has a DSN." }}
+{{- end }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "cairn.fullname" . }}-backup
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+spec:
+  schedule: {{ .Values.profiles.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-backup
+              image: {{ .Values.postgres.image }}
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "cairn.secretName" . }}
+                      key: POSTGRES_PASSWORD
+                - name: CAIRN_BACKUP_KEEP
+                  value: {{ .Values.profiles.backup.keep | quote }}
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  ts=$(date +%Y%m%d-%H%M%S)
+                  echo "pg-backup: dumping {{ .Values.postgres.database }} -> /backups/cairn-$ts.sql.gz"
+                  pg_dump -h {{ include "cairn.postgresName" . }} -U {{ .Values.postgres.user }} {{ .Values.postgres.database }} | gzip > /backups/cairn-$ts.sql.gz
+                  ls -1t /backups/cairn-*.sql.gz | tail -n +$((CAIRN_BACKUP_KEEP + 1)) | xargs -r rm -f
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ include "cairn.fullname" . }}-backups
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "cairn.fullname" . }}-backups
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.profiles.backup.storage }}
+{{- end }}

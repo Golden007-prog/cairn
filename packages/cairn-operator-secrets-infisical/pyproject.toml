@@ -1,0 +1,39 @@
+[project]
+name = "cairn-operator-secrets-infisical"
+version = "0.1.0"
+description = "Infisical SecretStore (secrets.store) for cairn — universal-auth machine identity."
+readme = "README.md"
+license = "Apache-2.0"
+authors = [{name = "cairn maintainers"}]
+requires-python = ">=3.11"
+dependencies = []  # base import stays SDK-free; the SDK is an optional extra
+
+[project.urls]
+Homepage = "https://cairndev.sh"
+Documentation = "https://docs.cairndev.sh"
+Source = "https://github.com/cairndev-sh/cairn"
+Issues = "https://github.com/cairndev-sh/cairn/issues"
+
+# The Infisical Python SDK is lazy-imported in the operator so the pack
+# imports (and mock mode runs) without it. Install this extra to talk to a
+# real Infisical server: `pip install "cairn-operator-secrets-infisical[infisical]"`.
+[project.optional-dependencies]
+infisical = ["infisicalsdk>=1.0.0"]
+
+[project.entry-points."cairn.operators"]
+"secrets/infisical" = "operator_secrets_infisical.operators.infisical:InfisicalSecretStoreOp"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/operator_secrets_infisical"]
+exclude = ["CLAUDE.md", "AGENTS.md"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"pack.toml" = "operator_secrets_infisical/pack.toml"
+
+# Process files (agent instructions) and tests stay out of the source archive.
+[tool.hatch.build.targets.sdist]
+exclude = ["CLAUDE.md", "AGENTS.md", "/.claude", "/tests"]

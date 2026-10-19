@@ -1,0 +1,17 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":disableDependencyDashboard"],
+  "timezone": "Etc/UTC",
+  "schedule": ["before 6am on monday"],
+  "labels": ["area:infra", "dependencies"],
+  "prConcurrentLimit": 3,
+  "lockFileMaintenance": { "enabled": true, "schedule": ["before 6am on the first day of the month"] },
+  "vulnerabilityAlerts": { "enabled": true, "schedule": ["at any time"], "labels": ["security"], "prPriority": 10 },
+  "osvVulnerabilityAlerts": true,
+  "packageRules": [
+    { "matchUpdateTypes": ["patch", "minor"], "matchManagers": ["pep621", "github-actions", "dockerfile"], "groupName": "non-major updates", "groupSlug": "non-major" },
+    { "matchUpdateTypes": ["major"], "groupName": null, "prPriority": 0 },
+    { "matchManagers": ["github-actions"], "pinDigests": false },
+    { "matchDepNames": ["torch", "unsloth", "trl", "peft", "transformers", "vllm", "bitsandbytes", "metaflow", "skypilot"], "matchUpdateTypes": ["major", "minor"], "enabled": false, "description": "ML stack pins are changed deliberately with a GPU proof, not by bot" }
+  ]
+}

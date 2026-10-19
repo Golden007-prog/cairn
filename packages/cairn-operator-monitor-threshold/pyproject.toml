@@ -1,0 +1,40 @@
+[project]
+name = "cairn-operator-monitor-threshold"
+version = "0.1.0"
+description = "Zero-dep signal/threshold detector — the generic data-shaped trigger (monitor.threshold)."
+readme = "README.md"
+license = "Apache-2.0"
+authors = [{name = "cairn maintainers"}]
+requires-python = ">=3.11"
+
+# Zero dependencies by design (ADR-0027 builtins rule): reads a numeric metric
+# from a pluggable source (inline / file / http) with stdlib only. Vendor drift
+# detectors (Evidently, NannyML) ship as official packs + extras providing the
+# SAME monitor.threshold capability — never bundled into the base install.
+dependencies = []
+
+[project.urls]
+Homepage = "https://cairndev.sh"
+Documentation = "https://docs.cairndev.sh"
+Source = "https://github.com/cairndev-sh/cairn"
+Issues = "https://github.com/cairndev-sh/cairn/issues"
+
+[project.entry-points."cairn.operators"]
+"monitor/threshold" = "operator_monitor_threshold.operators.threshold:ThresholdOp"
+"monitor/propose" = "operator_monitor_threshold.operators.propose:ProposeOp"
+"monitor/dispatch" = "operator_monitor_threshold.operators.dispatch:DispatchOp"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/operator_monitor_threshold"]
+exclude = ["CLAUDE.md", "AGENTS.md"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"pack.toml" = "operator_monitor_threshold/pack.toml"
+
+# Process files (agent instructions) and tests stay out of the source archive.
+[tool.hatch.build.targets.sdist]
+exclude = ["CLAUDE.md", "AGENTS.md", "/.claude", "/tests"]

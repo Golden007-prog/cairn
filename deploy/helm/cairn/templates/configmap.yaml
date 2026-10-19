@@ -1,0 +1,61 @@
+{{- include "cairn.validate" . -}}
+{{/*
+The chart's .env. Every CAIRN_* key docker-compose.yml sets on the
+`server` service appears here — tests/deploy/test_helm_chart.py parses the
+compose file and fails on the set difference, so adding a variable to compose
+without adding it here cannot merge.
+
+The DSNs live here rather than in the Secret so the rendered manifests are
+readable and diffable, exactly as compose puts them in the container
+environment. Where ConfigMaps and Secrets carry different RBAC, put
+CAIRN_STORAGE / CAIRN_CHECKPOINTER_DSN / CAIRN_DBOS_DSN in `secrets.existingSecret`
+instead: the Secret is the LAST envFrom source, so its value wins.
+
+The DSN family keeps its OBS_ name until 1.0 (ADR-0122, #2429), so an
+existingSecret written with either spelling keeps winning. cairn reads CAIRN_<NAME>
+first and OBS_<NAME> only when it is unset, so: with no existingSecret both names
+are rendered (same value); with one, only OBS_ is — a CAIRN_ key in the Secret then
+beats it, and an OBS_ key in the Secret replaces it. A rendered CAIRN_ name would
+shadow an OBS_-spelled Secret key. Every other key is CAIRN_ only.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cairn.configMapName" . }}
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+data:
+  CAIRN_TRIGGER_PORT: {{ .Values.server.port | quote }}
+  CAIRN_BACKEND: {{ .Values.env.backend | quote }}
+  CAIRN_RUNTIME: {{ .Values.runtime | quote }}
+  {{- include "cairn.dsnEnv" (list . "STORAGE") | nindent 2 }}
+  CAIRN_CHECKPOINTER: {{ .Values.checkpointer | quote }}
+  {{- include "cairn.dsnEnv" (list . "CHECKPOINTER_DSN") | nindent 2 }}
+  # Capability→operator bindings (the cairn PROFILE, not a compose profile).
+  CAIRN_PROFILE: {{ .Values.env.profile | quote }}
+  CAIRN_API_USER: {{ .Values.env.apiUser | quote }}
+  CAIRN_REQUIRE_AUTH: {{ ternary "1" "0" .Values.env.requireAuth | quote }}
+  CAIRN_TEMPORAL_ADDRESS: {{ include "cairn.temporalAddress" . | quote }}
+  {{- if .Values.profiles.nats.enabled }}
+  CAIRN_TRIGGER_DURABLE: "1"
+  CAIRN_TRIGGER_INBOX: {{ include "cairn.natsUrl" . | quote }}
+  {{- else }}
+  CAIRN_TRIGGER_DURABLE: ""
+  CAIRN_TRIGGER_INBOX: ""
+  {{- end }}
+  {{- if eq .Values.runtime "dbos" }}
+  # The DBOS system schema shares the one Postgres (#29), as the dbos-postgres
+  # compose tier does.
+  {{- include "cairn.dsnEnv" (list . "DBOS_DSN") | nindent 2 }}
+  {{- end }}
+  {{- if .Values.artifacts.s3.enabled }}
+  CAIRN_ARTIFACT_S3_ENDPOINT: {{ .Values.artifacts.s3.endpoint | quote }}
+  CAIRN_ARTIFACT_S3_BUCKET: {{ .Values.artifacts.s3.bucket | quote }}
+  CAIRN_ARTIFACT_S3_REGION: {{ .Values.artifacts.s3.region | quote }}
+  {{- end }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.observability.otlp.endpoint | quote }}
+  OTEL_EXPORTER_OTLP_HEADERS: {{ .Values.observability.otlp.headers | quote }}
+  MLFLOW_TRACKING_URI: {{ include "cairn.mlflowUri" . | quote }}
+  {{- range $k, $v := .Values.env.extra }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}

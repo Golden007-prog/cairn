@@ -1,0 +1,7 @@
+{
+  "symptom": "checkout latency spike — p99 > 4s for the last 15 minutes; customers seeing slow card-submit",
+  "service": "checkout",
+  "user_message": "looks like the latest deploy might be involved, traffic is normal",
+  "started_at": "2026-06-09T14:05:00Z",
+  "source": "manual"
+}

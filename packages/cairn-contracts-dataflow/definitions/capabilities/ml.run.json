@@ -1,0 +1,9 @@
+{
+  "format": "cairn.capability/1",
+  "id": "ml.run",
+  "revision": "1.0.0",
+  "summary": "Submit a kind: ml flow (a pack-addressed ref or an inline stage list) to the environment's ML engine and return its scalar stats and registered artifact ids. Rows and tensors never cross the control plane. The stage configurations are open here; stages carry their own stage contracts (ADR-0118).",
+  "input": "contract://ml.run.input/1.0.0",
+  "configuration": "contract://ml.run.configuration/1.0.0",
+  "output": "contract://ml.run.output/1.0.0"
+}

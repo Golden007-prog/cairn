@@ -1,0 +1,6 @@
+{
+  "format": "cairn.report/1",
+  "id": "train.eval_loss.report",
+  "revision": "1.0.0",
+  "spec": {"scalars": ["eval_loss", "tokens_seen"]}
+}

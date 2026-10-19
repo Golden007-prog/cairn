@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contract://artifact.promote.output/1.0.0",
+  "properties": {
+    "tag": {"default": "", "title": "Tag", "type": "string"},
+    "artifact_id": {"default": "", "title": "Artifact Id", "type": "string"},
+    "previous_artifact_id": {
+      "default": "",
+      "description": "What the tag pointed at before (empty on first promotion) \u2014 the rollback target.",
+      "title": "Previous Artifact Id",
+      "type": "string"
+    },
+    "uri": {"default": "", "description": "Where the now-promoted artifact lives.", "title": "Uri", "type": "string"},
+    "promoted": {"default": false, "title": "Promoted", "type": "boolean"}
+  },
+  "title": "ArtifactPromoteOutput",
+  "type": "object"
+}

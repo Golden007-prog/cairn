@@ -1,0 +1,50 @@
+# hello-cairn — the example domain pack (#2423, ADR-0120 D1; the feature proof,
+# ADR-0127 D1/D2).
+#
+# The one pack the public core ships so a fresh install has something governed
+# to run. It needs the engine and the builtin operator packs, and nothing from the
+# platform: four pipelines, one per kind of work (data, agentic, ml, operations).
+#
+# A domain pack is DATA plus glue, never operators (ADR-0127 D2): this manifest,
+# `pipelines/*.yaml` (the runnable surface), `flows/` (the components the
+# pipelines' flow and template legs name), `rag/docs` (a corpus), `data/`,
+# `policies/`, `profiles/`, the one-line `__init__.py`, a run-hook listener
+# (`hooks.py`, declared through the `cairn.run_hooks` entry point in pyproject.toml)
+# and a stdio MCP tool server (`tools/calc_server.py`). Neither piece of glue
+# registers an operation. Assets are found by convention (`pipelines/`, `flows/`,
+# `rag/`, `data/`, `policies/`), so there is no `[assets]` block.
+
+[pack]
+name        = "hello-cairn"
+version     = "0.2.0"
+description = "Example pack: check a dataset, ask its docs, fine-tune a small model and run a nightly job, each behind gates a person or the data answers."
+tags = [
+    "domain:example",
+    "data:jsonl",
+]
+kind        = "domain"
+publisher   = "cairn"
+trust_level = "builtin"
+
+[compat]
+cairn_engine = ">=0.1.0"
+
+# No `[requires] capabilities`: that table is satisfied by other DOMAIN packs'
+# `[provides]`, not by operator packs, so naming `data.profile` / `storage.put`
+# here would be a composition conflict on every deployment. The pipeline's
+# task legs are checked against the operator registry at plan time instead
+# (`cairn pipeline explain` names the operator class each leg resolves to).
+
+# The corpus ask-the-docs retrieves from. Indexed by the engine, not by a leg:
+# with CAIRN_RAG_AUTOINDEX=1 the server indexes every declared corpus at boot into
+# the collection rag/search reads (cairn/services/rag/lifecycle.py).
+[requires.rag.docs]
+corpus = "rag/docs"
+access = "vector_search"
+
+# The MCP server ask-the-docs' assistant template calls (tools/calc_server.py).
+# The profile names it under [profile.mcp_servers]; `cairn doctor` reports a
+# profile that does not.
+[requires.mcp]
+servers = ["hello-calc"]
+tools   = ["hello-calc:word_count", "hello-calc:add"]

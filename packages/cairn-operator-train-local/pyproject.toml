@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cairn-operator-train-local"
+version = "0.1.0"
+description = "LoRA fine-tuning on CPU (train.finetune): the train/lora operation and ml stage, train/eval-loss (ADR-0127 D4)."
+readme = "README.md"
+license = "Apache-2.0"
+authors = [{name = "cairn maintainers"}]
+requires-python = ">=3.12"
+# Zero deps on a base install (builtin rule): the pack imports and registers without the
+# training stack, and both operations refuse at `run` naming the extra below.
+dependencies = []
+
+[project.optional-dependencies]
+# [train] — the CPU training stack. The floors mirror the platform training operator's `[local]`
+# pins, minus trl/accelerate/bitsandbytes:
+# the loop here is a plain torch optimizer over a peft LoRA model. Not in the engine image
+# (CPU torch is too large for it); install it where the ml engine runs.
+train = ["torch>=2.11,<2.12", "transformers>=5.5,<5.6", "peft>=0.20,<0.21", "datasets>=4.3,<4.4"]
+
+[project.urls]
+Homepage = "https://cairndev.sh"
+Documentation = "https://docs.cairndev.sh"
+Source = "https://github.com/cairndev-sh/cairn"
+Issues = "https://github.com/cairndev-sh/cairn/issues"
+
+[project.entry-points."cairn.operators"]
+"train/lora" = "operator_train_local.operators.lora:TrainLoraOp"
+"train/eval-loss" = "operator_train_local.operators.eval_loss:EvalLossOp"
+
+# The same fine-tune as an ml flow stage (ADR-0082 D7): the builtin engine resolves it by
+# name from this group; core never imports this pack.
+[project.entry-points."cairn.dataflow_stages"]
+"train.lora" = "operator_train_local.stages:train_lora"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/operator_train_local"]
+exclude = ["CLAUDE.md", "AGENTS.md"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"pack.toml" = "operator_train_local/pack.toml"
+
+# Process files (agent instructions) and tests stay out of the source archive.
+[tool.hatch.build.targets.sdist]
+exclude = ["CLAUDE.md", "AGENTS.md", "/.claude", "/tests"]

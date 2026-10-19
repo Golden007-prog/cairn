@@ -1,0 +1,94 @@
+"""#976 — RunReconciler heals zombie runs from the runtime's terminal status."""
+
+from __future__ import annotations
+
+import os
+import tempfile
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from cairn.core.engine.schema import TriggerEvent
+from cairn.core.runtime.reconciler import reconcile_stale_runs
+from cairn.core.storage.protocols import Run
+from cairn.core.storage.sqlite.runs import SqliteRunStore
+
+OLD = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+
+
+def _young() -> str:
+    """NOW at call time — as a module constant this was stamped at COLLECTION,
+    so in a full-suite run the test executed minutes later and "young" had
+    aged past the 120s grace window (#1199 flake)."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _store() -> SqliteRunStore:
+    return SqliteRunStore(os.path.join(tempfile.mkdtemp(), "runs.db"))
+
+
+def _run(rid: str, status: str, created_at: str) -> Run:
+    return Run(
+        id=rid, status=status, workspace_id="default",
+        created_at=created_at, trigger=TriggerEvent(source="manual"),
+    )
+
+
+def _fixed_status(mapping):
+    async def fn(run_id: str):
+        return mapping.get(run_id)
+    return fn
+
+
+@pytest.mark.asyncio
+async def test_reconciles_terminal_workflow_to_failed():
+    store = _store()
+    await store.create(_run("run-a", "running", OLD))
+    done = await reconcile_stale_runs(store, _fixed_status({"run-a": "failed"}), grace_seconds=120)
+    assert done == ["run-a"]
+    got = await store.get("run-a")
+    assert got.status == "failed"
+    # audit event tagged as reconciled + prior status recorded
+    events = await store.get_events("run-a")
+    last = events[-1]
+    assert last.type == "failed"
+    assert last.data.get("reconciled_by") == "reconciler"
+    assert last.data.get("prior_status") == "running"
+
+
+@pytest.mark.asyncio
+async def test_completed_workflow_reconciles_to_done():
+    store = _store()
+    await store.create(_run("run-c", "running", OLD))
+    await reconcile_stale_runs(store, _fixed_status({"run-c": "done"}), grace_seconds=120)
+    assert (await store.get("run-c")).status == "done"
+
+
+@pytest.mark.asyncio
+async def test_still_running_workflow_is_left_untouched():
+    store = _store()
+    await store.create(_run("run-b", "running", OLD))
+    done = await reconcile_stale_runs(store, _fixed_status({"run-b": None}), grace_seconds=120)
+    assert done == []
+    assert (await store.get("run-b")).status == "running"
+
+
+@pytest.mark.asyncio
+async def test_young_run_inside_grace_window_is_skipped():
+    store = _store()
+    await store.create(_run("run-young", "running", _young()))
+    # even though the runtime would say terminal, the grace window protects it
+    done = await reconcile_stale_runs(store, _fixed_status({"run-young": "failed"}), grace_seconds=120)
+    assert done == []
+    assert (await store.get("run-young")).status == "running"
+
+
+@pytest.mark.asyncio
+async def test_terminal_runs_are_never_touched():
+    store = _store()
+    await store.create(_run("run-done", "done", OLD))
+    # a status_fn that (wrongly) claims failed must not flip an already-terminal run,
+    # because terminal statuses aren't in ACTIVE_STATUSES so they're never swept
+    done = await reconcile_stale_runs(store, _fixed_status({"run-done": "failed"}), grace_seconds=120)
+    assert done == []
+    assert (await store.get("run-done")).status == "done"

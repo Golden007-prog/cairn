@@ -1,0 +1,62 @@
+# local-dev — the zero-config developer profile shipped with the substrate.
+#
+# Wires every binding to the in-tree backends so a fresh checkout can run
+# every built-in pack end-to-end without spinning up Postgres, Vault, or
+# any external MCP server. Production deployments either replace this
+# file outright or ship their own profile that `extends` it for the
+# parts they want to inherit.
+#
+# To activate:  export CAIRN_PROFILE=$(python -c "import cairn.profiles as p, pathlib; print(pathlib.Path(p.__file__).parent / 'local-dev.toml')")
+#
+# Or in code:   from cairn.core.pack.profile import load_profile
+#               profile = load_profile(local_dev_path())
+
+[profile]
+# #1570 — BASE layer of the inheritance chain — extended, not picked
+visibility = "internal"
+# No parent — this IS the base profile the substrate ships.
+
+[profile.capabilities]
+# Disambiguation for capabilities with multiple providers. The built-in
+# incident pack is currently the only provider for every capability it
+# touches, so this table is empty in the default config. Override per
+# deployment if a community pack lands that conflicts.
+
+[profile.bindings]
+# Substrate-level capability → operator name. Each value is the name
+# the operator declared via @register_operator + matches the
+# pack.toml [operator."<name>"] table. Phase 2.6 fixed an earlier
+# inconsistency where these used aspirational pack-flavor names
+# (e.g. "memory/sqlite-vector") that didn't match installed operator
+# names — the runtime needs operator names to dispatch.
+#
+# Production profiles override these with richer backends shipped as
+# separate operator packs (cairn-operator-pgvector, cairn-operator-s3, etc.).
+"memory.search"  = "memory/search"   # cairn-operator-memory-local
+"memory.write"   = "memory/write"    # cairn-operator-memory-local
+"storage.put"    = "storage/put"     # cairn-operator-artifact-local
+"storage.get"    = "storage/get"     # cairn-operator-artifact-local
+"rag.search"     = "rag/search"      # cairn-operator-rag-local
+"rag.fetch"      = "rag/fetch"       # cairn-operator-rag-local
+"mcp.call"       = "mcp/call"        # cairn-operator-mcp
+# No `eval.delta` here (ADR-0134 D5): every binding in a shipped profile resolves against
+# the public builtins, and `eval/delta` is the platform's eval operator. The platform binds it
+# in its own profiles.
+# state.runs: ahead-of-demand — state-store ops aren't called from
+# templates (substrate-internal). operator-state-local lands when the
+# dispatcher refactor wires through the registry; until then this
+# binding stays commented to avoid a dangling ref.
+# "state.runs"   = "state/sqlite"
+
+[profile.mcp_servers]
+# Empty by default — local-dev mocks every MCP-served capability via the
+# operator packs. A pack that opts into direct `mcp_call` nodes needs the
+# deploying profile to add servers here.
+
+[profile.backends]
+llm_gateway     = "env:OPENAI_API_KEY"
+embedder        = "text-embedding-3-small"
+# No `durable_runtime` here (#2296): a base layer that pinned in_process forced it on
+# every profile built on this one (#1852 — a profile pin beats CAIRN_RUNTIME), so
+# a production profile ran in-process under a DBOS or Temporal deployment. The runtime follows
+# CAIRN_RUNTIME (default inprocess) unless a profile pins it (sandbox does).

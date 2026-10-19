@@ -1,0 +1,28 @@
+# github — known-good MCP connector preset.
+#
+# Reference spec for the official GitHub MCP server. A deployment uses it via
+# `preset_connection("github")` (→ a ready connection dict) or by copying the
+# [server] block into a profile's [profile.mcp_servers.github]. A pack pins the
+# exact tools it needs via [requires.mcp].tools = ["github:list_issues", …];
+# pair with tool_allow_list_strict in the profile to deny everything else.
+
+[connector]
+name        = "github"
+description = "GitHub — issues, PRs, repos, code search."
+publisher   = "modelcontextprotocol"
+
+[server]
+transport = "stdio"
+command   = ["npx", "-y", "@modelcontextprotocol/server-github"]
+
+[env]
+# name = "required|optional — what it is"
+GITHUB_PERSONAL_ACCESS_TOKEN = "required — fine-grained PAT, least-privilege"
+
+[scopes]
+note = "Grant only what the pack uses: 'repo' read for code/issue reads; add issues:write only if a pack creates issues."
+
+[tools]
+# Representative surface (the server offers more); a pack declares the subset
+# it needs. Listed here so authors know what to pin.
+common = ["list_issues", "create_issue", "get_issue", "get_file_contents", "search_code", "list_pull_requests"]

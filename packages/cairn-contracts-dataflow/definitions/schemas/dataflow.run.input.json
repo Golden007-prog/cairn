@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contract://dataflow.run.input/1.0.0",
+  "description": "The operator's binding surface \u2014 a thin veneer over DataflowSpec so\noperation YAMLs bind scalars/lists naturally.",
+  "properties": {
+    "dataflow_ref": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "default": null,
+      "description": "Pack-addressed dataflow (first-class in P2a, #1051).",
+      "title": "Dataflow Ref"
+    },
+    "stages": {
+      "description": "Inline stage list: [{stage, config?, resources?}].",
+      "items": {"additionalProperties": true, "type": "object"},
+      "title": "Stages",
+      "type": "array"
+    },
+    "input_artifacts": {"items": {"type": "string"}, "title": "Input Artifacts", "type": "array"},
+    "config": {"additionalProperties": true, "title": "Config", "type": "object"},
+    "budget": {
+      "additionalProperties": true,
+      "description": "{max_cost_usd?, max_rows?, max_seconds?}.",
+      "title": "Budget",
+      "type": "object"
+    },
+    "parent_run": {
+      "default": "",
+      "description": "Run lineage (#989); usually set by --from.",
+      "title": "Parent Run",
+      "type": "string"
+    }
+  },
+  "title": "DataflowRunInput",
+  "type": "object"
+}

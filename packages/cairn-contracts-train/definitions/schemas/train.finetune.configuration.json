@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contract://train.finetune.configuration/1.0.0",
+  "description": "The deployment's default base model. Operational scope: a profile pins it under [profile.config], a run's bound base_model still wins.",
+  "properties": {
+    "base_model": {
+      "default": "Qwen/Qwen2.5-0.5B",
+      "description": "The base model a run uses when it binds none.",
+      "title": "Base Model",
+      "type": "string"
+    }
+  },
+  "title": "TrainLoraConfig",
+  "type": "object",
+  "additionalProperties": false
+}

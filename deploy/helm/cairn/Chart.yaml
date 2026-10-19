@@ -1,0 +1,31 @@
+apiVersion: v2
+name: cairn
+description: >-
+  The cairn control plane on Kubernetes — server, worker, Postgres (bundled or
+  external), Ingress in place of Caddy. A translation of docker-compose.yml,
+  not a second architecture (ADR-0104 D4, #26).
+type: application
+
+# Chart version — bumped when the TEMPLATES change.
+version: 0.1.0
+
+# The default engine image tag. Overridden by `image.tag`; pin it in prod
+# (`cairn deploy doctor --values … --strict` fails on `latest`).
+appVersion: "latest"
+
+home: https://cairndev.sh
+sources:
+  - https://github.com/cairndev-sh/cairn
+keywords:
+  - cairn
+  - governance
+  - workflows
+  - control-plane
+maintainers:
+  - name: cairn maintainers
+    url: https://github.com/cairndev-sh
+annotations:
+  # The two supported deployment shapes (ADR-0104 Consequences): a single host
+  # (compose) and a cluster (this chart). Both run the same image.
+  cairn.dev/shape: cluster
+  cairn.dev/adr: ADR-0104

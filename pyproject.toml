@@ -1,0 +1,491 @@
+[project]
+# The DISTRIBUTION is `cairndev` (ADR-0121 D3, #2429); the import name `cairn` and the
+# `cairn` command do not change.
+name = "cairndev"
+version = "0.1.0"
+description = "A governed control plane for AI and ML work: pipelines that fine-tune, evaluate, compress and serve models, with approval, policy, budget and lineage on every step"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"]
+authors = [{name = "cairn maintainers"}]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: System :: Systems Administration",
+]
+dependencies = [
+    # #1195 (ADR-0085 D7) — `cairn remote` (and each further ported user
+    # command) drives the control plane through the typed client. The client
+    # depends on NOTHING from cairn; this direction (cairn → cairn-client)
+    # is the allowed one.
+    "cairn-client",
+    # the authoring projection (#1253, ADR-0087 P1) — compiles classes to
+    # records; imports NOTHING from cairn.core (the golden tests in tests/core
+    # hold compiler and loader together).
+    "cairn-sdk",
+    "fastapi[standard]>=0.115.0",
+    "langgraph>=0.4.0",
+    "langchain-core>=0.3.0",
+    "langchain-openai>=0.3.0",
+    "langchain-mcp-adapters>=0.2.0",
+    "litellm>=1.50.0",
+    "fastmcp>=2.0.0",
+    "jinja2>=3.1.0",
+    # #1545 — [compat] cairn_engine enforcement parses SpecifierSets at pack
+    # load; declared explicitly so the loader never leans on a transitive dep.
+    "packaging>=23.0",
+    "pydantic-settings>=2.6.0",
+    "pyyaml>=6.0",
+    # The ONE expression language (#1118). cairn.core.engine.expr imports it at
+    # module load, and every `cairn` command reaches that through cairn.core.dataflow,
+    # so it is a base dep, not only [kernel] (#2536: a plain install got it only
+    # transitively, through boto3).
+    "jmespath>=1.0",
+    "jsonschema>=4.26.0",  # shared contract schema validation (#2240)
+    "referencing>=0.37.0",  # exact contract:// reference closure (#2240 B2)
+    # Comment-preserving TOML editing — the profile form reads + writes
+    # cairn/profiles/*.toml without dropping their explanatory comments
+    # (stdlib tomllib is read-only). Used by the web profile editor.
+    "tomlkit>=0.13.0",
+    "sse-starlette>=2.0.0",
+    "httpx>=0.28.0",
+    "aiofiles>=24.1.0",
+    # Skill files are YAML-frontmatter markdown (skill_engine.load_skill).
+    "python-frontmatter>=1.0.0",
+    # In-process schedulers: SkillScheduler + RagIndexScheduler (Tier 1).
+    "apscheduler>=3.10.0",
+    "opentelemetry-sdk==1.41.1",
+    "opentelemetry-instrumentation-logging",
+    # JWT auth for the trigger server control plane (an internal issue).
+    # Token *verification* is the hot path (base dep); password *hashing* for
+    # POST /token is the optional [auth] extra.
+    "pyjwt>=2.8.0",
+    # CLI dispatcher — backs the `cairn` script entry point. Light enough
+    # to be a base dep so `pip install cairn` gives users the CLI.
+    "typer>=0.12.0",
+    # ADR-0120 D1 (#2419) — the base install is the PUBLIC set and nothing else:
+    # the builtin operator packs (each its own workspace wheel; listing them
+    # here makes their `cairn.operators` entry points discoverable) and the
+    # contracts `dataflow`, `audit` and `mcp`. The official packs, the domain
+    # contracts, `cairn-ask` and asyncssh are the [platform], [ask] and [ssh]
+    # extras below; this repository's CI and image install all three.
+    "cairn-operator-mcp",
+    "cairn-operator-memory-local",
+    "cairn-operator-artifact-local",
+    "cairn-operator-rag-local",
+    "cairn-operator-rag-rerank",
+    "cairn-operator-redact-regex",
+    "cairn-operator-monitor-threshold",
+    "cairn-operator-audit-store",
+    "cairn-operator-secrets-env",
+    # secrets/infisical — the Infisical SecretStore, builtin since ADR-0127 D3;
+    # its SDK is the [infisical] extra below.
+    "cairn-operator-secrets-infisical",
+    # ADR-0074 — data validation, tiers 1+2/3a (tier 3b is the official
+    # cairn-operator-data-expectations, in [platform]).
+    "cairn-operator-data-profile",
+    # required by every flow leg (the builtin dataflow engine).
+    "cairn-operator-dataflow",
+    # remote/exec (#70): the dataflow SSH engine's transport; asyncssh is [ssh] (#2427).
+    "cairn-operator-remote",
+    # ADR-0127 D4 — train/lora + the `train.lora` ml stage + train/eval-loss. Registers on
+    # this base install; the CPU training stack is the [train] extra below.
+    "cairn-operator-train-local",
+    # #2242 V1-B — one data-only distribution per capability domain (decision B1a).
+    # Installed NON-editable (see [tool.uv.sources]) — B2 refuses an editable
+    # install as not data-only.
+    "cairn-contracts-dataflow",
+    "cairn-contracts-audit",
+    "cairn-contracts-mcp",
+    "cairn-contracts-monitor",
+    "cairn-contracts-artifact",
+    # #2243 V2 — the builtin tier's remaining capability domains, one distribution each.
+    "cairn-contracts-storage",
+    "cairn-contracts-memory",
+    "cairn-contracts-redact",
+    "cairn-contracts-secrets",
+    # #2243 V2 — the builtin tier's rag, remote and data capability domains.
+    "cairn-contracts-rag",
+    "cairn-contracts-remote",
+    "cairn-contracts-data",
+    # ADR-0127 D4 — the train capability domain (train.finetune).
+    "cairn-contracts-train",
+]
+
+[project.urls]
+Homepage = "https://cairndev.sh"
+Documentation = "https://docs.cairndev.sh"
+Source = "https://github.com/cairndev-sh/cairn"
+Issues = "https://github.com/cairndev-sh/cairn/issues"
+
+# `cairn` script — landed on PATH by `pip install -e .`. Sub-commands
+# live under cairn/cli/commands/, registered in cairn/cli/main.py.
+[project.scripts]
+cairn = "cairn.cli.main:app"
+# The trigger server, runnable from an installed wheel (ADR-0029). A second
+# console script, NOT an 11th CLI verb — the verb list is locked (§24.20.14).
+cairn-server = "cairn.core.triggers.main:main"
+# The Temporal worker (an internal issue): the durable executor that picks
+# up workflows the server submits when CAIRN_RUNTIME=temporal. Needs the
+# runtime-temporal extra; runs as the `worker` service in the full local stack.
+cairn-worker = "cairn.core.runtime.temporal.worker:main"
+# Read-only admin UI over the run store (the `admin` extra). Serves /admin via
+# starlette-admin bound to the configured RunStore (sqlite or Postgres).
+cairn-admin = "cairn.core.admin:main"
+
+# Vector-store PROVIDERS (#76) — external backends kept OUT of the core import
+# path, resolved lazily via this entry-point group (core `services/rag/stores`
+# ships only sqlite_vec + pgvector). Code in cairn/providers/vectorstores/;
+# third-party deps behind the rag-qdrant / rag-pinecone extras.
+[project.entry-points."cairn.vector_stores"]
+qdrant = "cairn.providers.vectorstores.qdrant:QdrantStore"
+pinecone = "cairn.providers.vectorstores.pinecone:PineconeStore"
+
+# Demo-data providers for `cairn demo` / `cairn dev --seed` (ADR-0120 D4, #2418;
+# loader: cairn/core/pack/seeds.py). The core's own seeds the example pack;
+# platform-demo (the flagship flows + governed scenarios) is declared by
+# the platform package (#2421). The licence door's `cairn.model_catalogs`
+# (#2414) has no core provider: the platform declares the training catalogue;
+# absent = no catalogue.
+[project.entry-points."cairn.seeds"]
+hello-cairn = "cairn.core.demo_seed:seed_hello_cairn"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.28.0",
+    "langgraph-cli[inmem]>=0.1.50",
+    "deepeval>=1.5.0",
+    "moto>=5.0",          # mock AWS for cairn-operator-s3 tests (hermetic)
+    # Detect sync I/O blocking the asyncio event loop in async tests (issue #84).
+    # Used by the opt-in `no_loop_blocking` fixture. Same tool Langflow runs in CI.
+    "blockbuster>=1.5.20,<1.6",
+]
+telemetry = [
+    "opentelemetry-api>=1.27.0",
+    "opentelemetry-sdk>=1.27.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.27.0",
+    "opentelemetry-instrumentation-logging>=0.48b0",
+]
+# Read-only web admin over the run store (cairn-admin / mount_admin). Custom
+# data layer over RunStore — no ORM — so it follows CAIRN_STORAGE (sqlite/pg).
+# Optional chat UI shell over POST /ask — not part of the demo stack;
+# install ad-hoc if you want it: `pip install -e ".[chat]"`.
+rag = [
+    "fastembed>=0.3.0",
+    # fastembed pulls onnxruntime; releases after 1.20.1 ship no wheels for
+    # macOS-x86_64, so a fresh sync on Intel Macs fails without this pin.
+    'onnxruntime<=1.20.1 ; platform_system == "Darwin" and platform_machine == "x86_64"',
+    "google-genai>=1.0.0",
+    "llama-index-core>=0.12.0",
+    "llama-cloud>=0.1.0",
+    "trafilatura>=2.0.0",
+]
+# Production PII scrub for dataset/anonymize + dataset/pii_scan (#711): Microsoft
+# Presidio (NER-based) catches human PII the zero-dep regex fallback can't — phone,
+# credit-card, person, location. Mirrors the dataset-checks operator's own [pii] extra.
+# The spaCy model (en_core_web_lg) is NOT a PyPI dep — the image installs it
+# explicitly (Dockerfile.engine) via the pinned model wheel; locally:
+#   uv pip install "en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl"
+pii = ["presidio-analyzer>=2.2", "presidio-anonymizer>=2.2"]
+rag-qdrant = ["qdrant-client>=1.9.0"]
+rag-pinecone = ["pinecone-client>=3.0.0"]
+rag-pgvector = ["asyncpg>=0.29.0", "pgvector>=0.3.0"]
+# Zero-config dev: vectors in the same SQLite file as runs/events via the
+# sqlite-vec extension. Delivers the §24.4 Tier-1 "one file" promise.
+rag-sqlite-vec = ["sqlite-vec>=0.1.0"]
+# §24.4 P5: Postgres-backed RunStore for runs + events. Install + set
+# CAIRN_STORAGE=postgres://… to route the run store to Postgres. Pair with
+# rag-pgvector for the full "one Postgres for everything" prod tier.
+storage-postgres = ["asyncpg>=0.29.0"]
+# Durable HITL (ADR-0024 RM3): LangGraph checkpointer backends for the
+# action saga's interrupt()/resume. Default tier is in-process MemorySaver
+# (no extra). Install one of these + set CAIRN_CHECKPOINTER=sqlite|postgres
+# for cross-restart durability.
+runtime-postgres = ["langgraph-checkpoint-postgres>=3.0.0"]
+runtime-sqlite = ["langgraph-checkpoint-sqlite>=2.0.0"]
+# Temporal runtime (ADR-0022 Step 3): CAIRN_RUNTIME=temporal submits runs as
+# Temporal workflows via the langgraph plugin. Optional — inprocess default.
+runtime-temporal = ["temporalio[langgraph]>=1.28.0"]
+# DBOS durable runtime (ADR-0035): CAIRN_RUNTIME=dbos wraps each run as a DBOS
+# workflow for crash-recovery + durable HITL — a library, no server, backed by
+# SQLite (dev) or the one Postgres (prod). Pair with runtime-sqlite /
+# runtime-postgres for the LangGraph checkpointer that owns the actual resume.
+runtime-dbos = ["dbos>=2.0"]
+# Hyperparameter search (#2034, ADR-0102 D2 · warm-start §3.6.3 "wire, never
+# build"). Optuna is the SEARCH layer only: `enqueue_trial` injects the
+# portfolio, its pruner does successive halving, and its RDB storage is the
+# trial database. cairn keeps the governance shell around it. Nothing in the
+# core imports optuna — `cairn.core.storage.training_runs.optuna_storage_url`
+# derives the storage URL (the same database the training_runs rows live in)
+# without it, so this extra is needed only to CREATE a study.
+optuna = ["optuna>=4.0"]
+# JWT auth for the trigger server (an internal issue): password hashing for
+# POST /token. Token *verification* needs only pyjwt (a base dep); only token
+# *issuance* needs this. Enable auth with CAIRN_JWT_SECRET + CAIRN_API_PASSWORD[_HASH].
+auth = ["pwdlib[argon2]>=0.2.0"]
+# NATS JetStream backend for the durable trigger inbox (#115) — the multi-node
+# swap behind the TriggerInbox Protocol. Optional: the sqlite inbox is the
+# default and needs no broker. Install with `pip install -e ".[nats]"`.
+nats = ["nats-py>=2.6.0"]
+# Built-in in-process OAuth broker (#116) — AuthlibBroker runs the auth-code
+# dance in cairn's own process (no sidecar), full token custody. Optional:
+# The built-in (and only shipped) broker — #310. Install with `pip install -e ".[oauth]"`.
+oauth = ["authlib>=1.3.0"]
+# Infisical writable secret backend (#200) — store credential values in a
+# self-hosted/cloud Infisical (MIT core) via infisical:// refs. Optional: the
+# local encrypted-file backend (cryptography, base dep) is the default and needs
+# no service. Install with `pip install -e ".[infisical]"`. The same SDK backs the
+# builtin secrets/infisical operator (cairn-operator-secrets-infisical, lazy import).
+infisical = ["infisicalsdk>=1.0.0"]
+# The example pack and everything its four pipelines reach beyond the base install
+# (ADR-0127 D1): `pip install 'cairndev[hello]'` → cairn-pack-hello[all] → the
+# sqlite-vec store, asyncssh and DBOS. The training stack is not in it
+# (cairn-operator-train-local[train]).
+hello = ["cairn-pack-hello[all]"]
+# Toad-style interactive terminal console (`cairn remote console`, #56):
+# a Textual TUI + Rich rendering + dropdown autocomplete over the server's
+# HTTP + SSE control plane. Optional — the base CLI stays lean. Install with
+# `pip install -e ".[tui]"` (or `uv pip install textual textual-autocomplete`).
+# #898 (epic #888) — the whole real fine-tuning stack in ONE install, so a
+# governed prod deployment doesn't have to hunt down 5 extras: presidio PII
+# (NER, not regex), the lm-eval benchmark harness, the MLflow registry, the
+# durable Temporal runtime, and the Postgres run store + near-dup MinHash.
+# Pair with a profile that declares the governed gates (the platform's
+# production.toml, ADR-0134 D5): `cairn doctor` cross-checks it against these,
+# failing if any is missing (#898). Real GPU training runs on a box that
+# additionally installs the training operator's `[local]` (or `[gpu]`) extra.
+# The flow engines + columnar kernels an environment can SELECT (dataflow_engine /
+# ml_engine = builtin|metaflow; dedup backend=duckdb). Baked into the
+# prod image (Dockerfile.engine) so a selected engine is always runnable — a
+# control plane whose doctor says "ml_engine=metaflow" must be able to import
+# metaflow. Found live 2026-08-18 that it could not.
+# ── [kernel] — what a JOB MACHINE needs, as opposed to a control plane (#2093) ──
+# A box or container that RUNS a flow imports `cairn.core.dataflow` (the spec +
+# the defs), the expression language, and the schema loader — and nothing else
+# of cairn's. It must NOT carry fastapi/langgraph/litellm/temporalio: those are
+# the control plane, and shipping them to a rented GPU is the boundary
+# `deploy/images/train-gpu/Dockerfile` exists to hold.
+#
+# This set is MEASURED, not guessed. Before it existed, the image installed
+# `cairn --no-deps` and hand-picked the rest, so a missing dependency was
+# discovered by a training run failing on billed hardware: `boto3` on
+# 2026-09-07 (every flow stage silently unimportable, reported as "unknown
+# stages"), then `jsonschema` mid-run. To re-measure after changing the kernel
+# path:
+#
+#   python -c "import sys; b=set(sys.modules); import cairn.core.dataflow; #              print(sorted({m.split('.')[0] for m in set(sys.modules)-b}))"
+#
+# and run one real ML flow — import-time measurement alone does NOT catch a
+# lazy import on the run path, which is exactly how `jsonschema` was missed.
+kernel = [
+    "pydantic>=2.7",       # the DataflowSpec / FlowDef contracts
+    "pyyaml>=6.0",         # flows/*.yaml
+    "jmespath>=1.0",       # the ONE expression language (#1118)
+    "jsonschema>=4.26.0",  # yaml_loader at import; the ONE contract validator (ADR-0118 D5) — the core floor
+    "boto3>=1.34.0",       # stage inputs/outputs through the S3 artifact store (#1442)
+    # cairn.core.provider_settings, reached from cairn.core.obs.cost when a
+    # stage BODY runs. Not on the import path of `cairn.core.dataflow`, so the
+    # sys.modules measurement above cannot see it — found by running the real
+    # fine-tune flow in the image on 2026-09-08, which is why that measurement
+    # note says import-time alone is not enough.
+    "pydantic-settings>=2.6.0",
+]
+
+
+# ── ADR-0120 D3 (#2419) — what is NOT the public set ─────────────────────────
+# `cairn ask` (the NL→plan agent toolchain, #1196). The platform's `cairn.cli` provider
+# mounts the command only when cairn_ask is importable (ADR-0134 D6).
+# asyncssh (EPL-2.0 OR GPL-2.0-or-later) — kept out of the base install. remote/exec
+# (the train/remote path, which the builtin dataflow SSH engine reaches lazily) fails at
+# runtime "needs asyncssh" without it (#536 e2e); serve/vllm's own [ssh] is in [platform].
+ssh = ["cairn-operator-remote[ssh]"]
+# ADR-0127 D4 — the CPU LoRA stack train/lora and the `train.lora` stage need (torch,
+# transformers, peft, datasets). Separate from every other extra on purpose: CPU torch is
+# too large for the engine image, so Dockerfile.engine does not install it.
+train = ["cairn-operator-train-local[train]"]
+# ADR-0134 D2 (#2678) — the Metaflow dataflow engine: an optional public wheel, never a base
+# dependency. `[profile.backends] ml_engine = "metaflow"` without it is refused at the launch door.
+metaflow = ["cairn-operator-dataflow-metaflow", "metaflow>=2.12"]
+# ADR-0134 D3a — the SkyPilot provisioning engine: an optional public wheel. Selecting it without
+# the wheel is refused at the launch door (ADR-0134 D3c).
+skypilot = ["cairn-operator-dataflow-skypilot", "skypilot[aws,kubernetes,runpod,ssh,vast]>=0.13"]
+# The platform: every official operator pack and the domain contracts. Today's
+# deployments, this repository's CI and the engine image install
+# `cairn[platform,ssh,ask]`.
+
+
+# Pack discovery: cairn.core walks the `cairn.packs` / `cairn.operators` entry-point
+# groups at startup. Every entry point is declared by the workspace member that
+# ships it: operator packs (editable), and domain packs as DATA wheels
+# `cairn-pack-<name>` (#2420, ADR-0121) whose own `pyproject.toml`
+# declares the pack's own entry point. The root declares none, so a pack is
+# invisible until its wheel is installed; in a checkout the domain packs are
+# non-editable members of the `platform` extra, exactly like `cairn-contracts-*`.
+
+# ADR-0120 D4 (#2422) — HTTP surfaces beyond the public API (D2) are `cairn.routers`
+# providers. The root registers none: the server mounts D2 itself (`jobs` and the
+# `/oauth/callback` redirect included, #2427), and the console's surfaces, `ask` and the
+# product routers are declared by the platform package, which ships them (#2421, #2427).
+
+# ─── uv workspace (cargo/npm-style monorepo) ────────────────────────
+#
+# Each operator pack is its own Python distribution with its own
+# pyproject.toml + src/<operator_name>/ layout. The wheel's import
+# name (`operator_clickstack`, etc.) is standalone — decoupled from
+# the pack's filesystem tier. Promoting from builtins/ → official/
+# is a directory move, zero code changes.
+#
+# When the root project is installed (`uv sync` / `uv pip install -e .`),
+# uv resolves each workspace member as an editable dep and contributes
+# its `cairn.operators` entry-points to the running interpreter.
+[tool.uv.workspace]
+members = [
+    "packages/cairn-client",
+    "packages/cairn-sdk",
+    "packages/cairn-operator-mcp",
+    "packages/cairn-operator-memory-local",
+    "packages/cairn-operator-artifact-local",
+    "packages/cairn-operator-rag-local",
+    "packages/cairn-operator-rag-rerank",
+    "packages/cairn-operator-redact-regex",
+    "packages/cairn-operator-monitor-threshold",
+    "packages/cairn-operator-audit-store",
+    "packages/cairn-operator-secrets-env",
+    "packages/cairn-operator-secrets-infisical",
+    "packages/cairn-operator-data-profile",
+    "packages/cairn-operator-dataflow",
+    "packages/cairn-operator-remote",
+    "packages/cairn-operator-train-local",
+    "packages/cairn-operator-dataflow-metaflow",
+    "packages/cairn-operator-dataflow-skypilot",
+    "packages/cairn-contracts-dataflow",
+    "packages/cairn-contracts-audit",
+    "packages/cairn-contracts-mcp",
+    "packages/cairn-contracts-monitor",
+    "packages/cairn-contracts-artifact",
+    "packages/cairn-contracts-storage",
+    "packages/cairn-contracts-memory",
+    "packages/cairn-contracts-redact",
+    "packages/cairn-contracts-secrets",
+    "packages/cairn-contracts-rag",
+    "packages/cairn-contracts-remote",
+    "packages/cairn-contracts-data",
+    "packages/cairn-contracts-train",
+    "examples/hello-cairn",
+]
+
+[tool.uv.sources]
+cairn-client           = { workspace = true }
+cairn-sdk              = { workspace = true }
+cairn-operator-data-profile  = { workspace = true }
+cairn-contracts-dataflow = { workspace = true, editable = false }
+cairn-contracts-audit  = { workspace = true, editable = false }
+cairn-contracts-mcp    = { workspace = true, editable = false }
+cairn-contracts-monitor = { workspace = true, editable = false }
+cairn-contracts-artifact = { workspace = true, editable = false }
+cairn-contracts-storage = { workspace = true, editable = false }
+cairn-contracts-memory = { workspace = true, editable = false }
+cairn-contracts-redact = { workspace = true, editable = false }
+cairn-contracts-secrets = { workspace = true, editable = false }
+cairn-contracts-rag    = { workspace = true, editable = false }
+cairn-contracts-remote = { workspace = true, editable = false }
+cairn-contracts-data   = { workspace = true, editable = false }
+cairn-contracts-train  = { workspace = true, editable = false }
+cairn-pack-hello = { workspace = true, editable = false }
+cairn-operator-mcp           = { workspace = true }
+cairn-operator-memory-local  = { workspace = true }
+cairn-operator-artifact-local = { workspace = true }
+cairn-operator-rag-local     = { workspace = true }
+cairn-operator-rag-rerank    = { workspace = true }
+cairn-operator-redact-regex  = { workspace = true }
+cairn-operator-monitor-threshold = { workspace = true }
+cairn-operator-audit-store   = { workspace = true }
+cairn-operator-secrets-env   = { workspace = true }
+cairn-operator-secrets-infisical = { workspace = true }
+cairn-operator-remote        = { workspace = true }
+cairn-operator-dataflow      = { workspace = true }
+cairn-operator-train-local   = { workspace = true }
+cairn-operator-dataflow-metaflow = { workspace = true }
+cairn-operator-dataflow-skypilot = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# The root wheel ships only the engine (`cairn/`) — operator packs
+# are sibling wheels, built and installed independently via the uv
+# workspace declaration above. Exclude operator pack src trees so
+# hatchling doesn't try to bundle them into the cairn wheel.
+packages = ["src/cairn"]
+exclude = ["CLAUDE.md", "AGENTS.md"]
+
+[tool.hatch.build.targets.sdist]
+# The source archive carries what builds the engine wheel (plus README, LICENSE,
+# NOTICE, examples) — not process files, internal docs, tests, deploy tooling, the
+# console sources, or the sibling workspace distributions, which have their own
+# sdists (#2405).
+exclude = ["CLAUDE.md", "AGENTS.md", "/.claude", "/.agents", "/.circleci", "/.github", "/docs", "/tests", "/deploy", "/packages", "/examples"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# `tests` = engine/core/CLI/pack-template/integration tests. Operator-pack tests
+# live INSIDE their pack and are listed here one directory each; CI runs plain
+# `pytest`, so a pack tests dir missing from this list is never run (#2410).
+# Not listed: builtins/rag_parse/tests — operator-rag-parse is not a workspace
+# member, so CI cannot import it (keep/retire decision: #2413).
+testpaths = ["tests", "packages/cairn-operator-rag-local/tests", "packages/cairn-operator-rag-rerank/tests", "packages/cairn-operator-monitor-threshold/tests", "packages/cairn-operator-secrets-infisical/tests", "packages/cairn-operator-data-profile/tests", "packages/cairn-operator-dataflow/tests", "packages/cairn-operator-remote/tests", "packages/cairn-operator-train-local/tests", "packages/cairn-operator-dataflow-metaflow/tests", "packages/cairn-operator-dataflow-skypilot/tests"]
+# Project root on sys.path so tests can resolve repo-relative paths and the
+# archived legacy/ tree if a legacy test ever needs it. Active cairn.* code
+# imports neither src.* nor legacy.* (the provider layer migrated into
+# cairn.core / cairn.services).
+pythonpath = ["."]
+markers = [
+    "expensive: tests that call LLMs in the synthesis path (slow, costs $)",
+    "dbos: DBOS runtime integration tests (spawn subprocesses; slower) — deselect with -m 'not dbos'",
+    "timing: a wall-clock benchmark measured on a developer machine; not a CI gate (run with -m timing)",
+    "train: runs a real LoRA fine-tune on a tiny model; needs cairn-operator-train-local[train] (skips without it; the e2e train cells too)",
+    # the hello-cairn feature proof (ADR-0127 D1): tests/e2e, run by scripts/oss/feature_proof.sh and the public-e2e job
+    "e2e: a real cairn-server subprocess per cell, driven as a user would (tests/e2e; excluded from the unit jobs)",
+    "services: an e2e cell that needs the light stack's `proof` profile (skipped with the reason when it does not answer)",
+    "crash: an e2e cell that SIGKILLs the server and asserts the ADR-0125 outcome after restart",
+]
+
+[tool.ruff]
+# #1515 — ruff adopted with a CORRECTNESS-ONLY ruleset, deliberately.
+#
+# The full default ruleset flags ~3,700 findings across 121k lines. Landing
+# that as one mechanical sweep would be an unreviewable diff, and gating CI on
+# it would wall off every contributor on day one — which is exactly why
+# .pre-commit-config.yaml declined to wire ruff at all.
+#
+# So: start with the rules that find BUGS, not style. `F` + `E9` is 109
+# findings, all of which this PR actually fixed — including 7 latent
+# NameErrors and a 57-line dead function shadowed by a later redefinition.
+# CI can gate on that from day one because it is already green.
+#
+# Widening the ruleset (I, UP, B, SIM…) is its own PR, one family at a time,
+# each landing green. Do NOT add a family here without fixing its findings in
+# the same change — a `select` that CI cannot pass is worse than no linter.
+target-version = "py312"
+line-length = 100
+# docs/ holds prose, ADRs and illustrative design samples — the sample
+# code there names things that do not exist yet ON PURPOSE.
+extend-exclude = [".venv", ".claude", "console", "site", "legacy", "private", "data", "docs"]
+
+[tool.ruff.lint]
+select = ["F", "E9"]
+# F401 (unused-import) is deliberately NOT adopted yet. Auto-removing "unused"
+# imports broke 168 test modules on the first attempt: several modules are
+# re-export points (`from .composition import load_profile_from_env`) with no
+# `__all__`, so the import IS the public API and ruff cannot see that. Adopting
+# it needs an `__all__` audit of the re-export modules first — its own PR.
+ignore = ["F401"]

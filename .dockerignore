@@ -1,0 +1,23 @@
+.git
+.gitignore
+.venv
+venv
+# JS deps — never needed in the engine image (the web dist is prebuilt separately
+# and baked in). They also contain self-referential symlinks to absolute host
+# paths that break hatchling's wheel-build file walk on Linux. Exclude at every depth.
+node_modules
+**/node_modules
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.env
+.env.local
+*.log
+.DS_Store
+docker-compose.yml
+Dockerfile
+.dockerignore
+docs

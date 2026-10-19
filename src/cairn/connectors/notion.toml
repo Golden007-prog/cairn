@@ -1,0 +1,22 @@
+# notion — known-good MCP connector preset.
+#
+# Reference spec for the official Notion MCP server. See github.toml for the
+# usage pattern.
+
+[connector]
+name        = "notion"
+description = "Notion — search, read, and append to pages/databases."
+publisher   = "makenotion"
+
+[server]
+transport = "stdio"
+command   = ["npx", "-y", "@notionhq/notion-mcp-server"]
+
+[env]
+NOTION_API_KEY = "required — internal integration token (ntn_…)"
+
+[scopes]
+note = "Share the specific pages/databases with the integration; least-privilege. Read-only unless a pack writes back."
+
+[tools]
+common = ["search", "retrieve_page", "query_database", "append_block_children"]

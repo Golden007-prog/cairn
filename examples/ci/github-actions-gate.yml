@@ -1,0 +1,57 @@
+# cairn gate in GitHub Actions (#990, ADR-0076 D2).
+#
+# Blocks a PR when the training dataset fails cairn's readiness gate, and posts
+# the cited findings as a PR comment. No cairn server, no separate Action — just
+# `pip install cairn && cairn gate …`. Copy this into .github/workflows/.
+name: cairn gate
+
+on:
+  pull_request:
+    paths: ['data/**']            # only when the dataset changes (tune to your repo)
+
+jobs:
+  dataset-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write        # to post the findings comment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # `[pii]` pulls in Presidio for real PII detection; drop it for the
+      # zero-dependency regex fallback (faster, coarser).
+      - run: pip install "cairn[pii]"
+
+      # Run the read-only gate. It exits non-zero on FAIL — captured, not fatal
+      # yet, so the comment step still runs. The final step re-raises it.
+      - name: cairn gate — dataset readiness
+        id: gate
+        run: |
+          set +e
+          cairn gate dataset-readiness/check \
+            --set path=data/train.jsonl \
+            --json > gate.json
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+          cat gate.json
+
+      - name: Comment the cited findings on the PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          verdict=$(jq -r '.verdict // "error"' gate.json)
+          {
+            echo "### cairn gate — \`${verdict}\`  ·  \`dataset-readiness/check\`"
+            echo
+            echo '```json'
+            jq '{verdict, blocking, warnings, reasons}' gate.json
+            echo '```'
+          } > body.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file body.md
+
+      # Block the merge if the gate failed.
+      - name: Enforce the gate
+        run: exit ${{ steps.gate.outputs.rc }}

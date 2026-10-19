@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contract://train.eval_loss.input/1.0.0",
+  "description": "Score a saved adapter: mean causal-LM loss over the first max_samples rows of the dataset.",
+  "properties": {
+    "adapter_path": {"description": "Directory of a LoRA adapter (what train.finetune returned).", "title": "Adapter Path", "type": "string"},
+    "base_model": {
+      "default": "Qwen/Qwen2.5-0.5B",
+      "description": "The base model the adapter was trained on.",
+      "title": "Base Model",
+      "type": "string"
+    },
+    "dataset": {
+      "description": "JSONL path (or file:// URI) of {\"text\": ...} rows, or a dataset ref.",
+      "title": "Dataset",
+      "type": "string"
+    },
+    "max_samples": {"default": 64, "description": "At most this many rows are scored.", "minimum": 1, "title": "Max Samples", "type": "integer"},
+    "max_seq_len": {
+      "default": 256,
+      "description": "Each row is truncated to this many tokens.",
+      "minimum": 8,
+      "title": "Max Seq Len",
+      "type": "integer"
+    }
+  },
+  "required": ["adapter_path", "dataset"],
+  "title": "EvalLossInput",
+  "type": "object"
+}

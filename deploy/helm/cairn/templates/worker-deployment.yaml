@@ -1,0 +1,56 @@
+{{- if eq .Values.runtime "temporal" }}
+{{/*
+The Temporal executor. SAME image as the server, different command — compose's
+`cairn-worker`. It gets the SAME env as the server on purpose: found live
+2026-08-17, a worker without the checkpointer settings started with 8/22 graphs
+compiled and every run of a missing graph spun forever. `envFrom` the same two
+sources makes that class of drift impossible here.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cairn.fullname" . }}-worker
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "cairn.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "cairn.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "cairn.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: {{ include "cairn.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["cairn-worker"]
+          envFrom:
+            {{- include "cairn.envFrom" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

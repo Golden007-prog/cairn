@@ -1,0 +1,39 @@
+# Governance contracts
+
+Governance is the set of chokepoints every governed action passes; the contract is
+**which decision is made where, from which inputs, and what is recorded**. One model:
+`docs/architecture/08-governance.md` explains it; this page states the contracts.
+
+## Inputs → decisions (CURRENT, OBSERVED)
+| Decision | Inputs | Made at | Output / record | Source |
+|---|---|---|---|---|
+| Policy effect on a run/leg | pack `policies/*.yaml`, console store, env overlay; risk; environment | `PolicyEngine` (`src/cairn/core/policy/engine.py:176`); effects `deny > require_hitl > require_dry_run > allow_auto` (`:8`, `:33-36`) | `PolicyDecision`; policy-injected gate legs on the plan (`inject_policy_gates`, `src/cairn/core/policy/pipeline_gates.py:155`; `deny` refuses the launch — invariant 3) | pipeline launch door (`pipeline_launch.py:410`) |
+| Per-operation approval | operator risk, binding, policy, profile | `enforce_gate` (`src/cairn/core/approval/enforce.py:116`) on every operator invocation; `enforce_flow_gate` (`:173`) on a flow leg's aggregate stage risk | interrupt / `awaiting_approval`; approver + verdict on the step (`StepState.verdict/approver`) | runtime + bridge |
+| Admission of a run's inputs (agentic path) | registered dataset versions' verdict, holdout overlap, base-model licence, service doors | `RunDispatcher.run_template` doors: provisioning (`dispatcher.py:803-811`), holdout (`:837`), intake (`:856`), licence (`:877`), job-channel (`:888`), SkyPilot (`:901`), pull-worker (`:911`) | refusal with reasons before a record exists; `degraded` stamped on the run (`Run.intake`, `Run.holdout`) | dispatcher |
+| Admission of a pipeline (T05, #2190) | the pipeline's declared inputs; registered versions' verdicts and check maps; holdout; licence; the applicable policies' `admission.required_checks`; environment | `decide_admission` (`src/cairn/core/admission_door.py`) at the launch door (`pipeline_launch.py`), once, before any record | `PipelineRecord.admission` (verdict `admitted`/`degraded`/`refused`, reasons, per-version facts with `required` stamped, `policy@<digest>`); shown in the gate context; refusal = 403 / exit 3 | launch door |
+| Budget | series cap (`governance.budget`), estimate, spent | `reserve` before a flow leg (`leg_executor.py:370`) — `spent` is what the pipeline's earlier legs recorded (`Run.cost.total_usd`, `leg_hooks.pipeline_spent_usd`, passed by both owners since #1441; unreadable → the leg is refused / the Temporal activity retries; an adopted leg is never refused for it, but its spend is then unknown and any fresh retry after it is refused) — and at run admission through the `run.admitting` run hook (`dispatcher.py:922`, the platform's `series` provider); `settle`/`release` after (`src/cairn/core/budget_reservations.py`): a flow leg settles at its engine-reported `DataflowResult.cost_usd` (`leg_executor.py:463`), a template run at its `cost.total_usd` (`dispatcher.py:1260`) | refusal on cap (a leg after an overspent leg is refused at reserve; nothing stops a leg mid-run); reservation on the run; `BudgetExceeded` mid-run via `BudgetCallback` (`services/llm/factory.py:69`); a flow's own `budget.max_cost_usd` binds at stage/wave boundaries on the runner-metered spend | dispatch |
+| LLM call governance | model, prompt, cost | `build_chat_model` (`services/llm/factory.py:97`) — redaction + `BudgetCallback` — invariant 2; `llm_complete` (`src/cairn/core/llm/client.py`) → `obs.record_llm` (`src/cairn/core/obs/cost.py:73`). Price (#1441): the call's reported cost (gateway `x-litellm-response-cost`, else litellm `response_cost`) → model-role registry → `litellm.model_cost`; none → `priced: false`, never a silent $0 | metered cost on the run; on a flow leg, the kernel runner's per-stage `llm_*` / `cost_usd` stats (`src/cairn/core/dataflow/runner.py` `_metered`); redacted logs | services |
+| Human release of a gate | approver identity, the shown snapshot (`show:`) | `advance_step` via `POST /pipelines/{id}/steps/{step}/approve` (`routers/pipelines.py:756`) | `verdict=approved`, `approver`, timestamps on the step; `pipeline.leg_awaiting_approval` audit | bridge |
+
+## Facts vs decisions
+A **fact** is measured once about immutable bytes (verdict report, holdout overlap,
+stage stats) and lives on the version/run. A **decision** applies a policy to facts for a
+request and must be recorded where the request is (`docs/architecture/training/16-…` §4).
+Today the intake verdict is computed once at registration and reused; the TARGET
+`AdmissionDecision` (#2190) is per request, on the `PipelineRecord`, shown to approvers.
+
+## Refusals and blocking
+Refusals happen **before a record exists** where possible (launch door, run admission)
+and name the reason and the remedy in the error (`FlowNotRunnableError`, door
+`ValueError`s). A gate that fires waits for a human — it never fails the leg (`pipeline_bridge.py:1040-1095`).
+
+## Audit
+`audit_emit` (`src/cairn/core/obs/audit.py:140`) writes governed actions to the configured
+sink; the bridge publishes `pipeline.<event>` (`pipeline_bridge.py:2330`); every
+approval/verdict is on the durable record. Redaction: `src/cairn/core/obs/redact.py`
+(`redact.text` in `src/cairn/profiles/secure.toml`). What is **not** audited today: policy
+evaluation itself (only its effect on the plan), and flow-leg admission (see above).
+
+## TARGET (not implemented)
+`AdmissionDecision` per request (#2190); `PromotionDecision` (#2197); the five automation
+controls on `TrainingTrigger` (#2207); an incident-regression gate (#1989).

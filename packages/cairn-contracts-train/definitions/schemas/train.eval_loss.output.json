@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contract://train.eval_loss.output/1.0.0",
+  "properties": {
+    "eval_loss": {"description": "Mean loss over the scored rows.", "title": "Eval Loss", "type": "number"},
+    "tokens_seen": {"description": "Non-padding tokens scored.", "title": "Tokens Seen", "type": "integer"}
+  },
+  "required": ["eval_loss", "tokens_seen"],
+  "title": "EvalLossOutput",
+  "type": "object"
+}

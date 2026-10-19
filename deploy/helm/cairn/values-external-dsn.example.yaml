@@ -1,0 +1,39 @@
+# Shape B — a managed Postgres (RDS / Cloud SQL / Neon), no bundled database.
+#
+# `postgres.enabled: false` + `postgres.external.dsn` is the pairing; setting
+# both, or neither, refuses to render.
+
+image:
+  repository: ghcr.io/cairndev-sh/cairn-engine
+  tag: v0.1.0
+
+runtime: dbos
+checkpointer: postgres
+
+ingress:
+  enabled: true
+  className: nginx
+  host: cairn.example.com
+  certManager:
+    clusterIssuer: letsencrypt-prod
+
+postgres:
+  enabled: false
+  external:
+    # The RAG tier wants pgvector; the run store, checkpointer and DBOS schema
+    # do not. Any Postgres 14+ works for the control plane itself.
+    dsn: postgresql://cairn:CHANGE-ME@db.example.com:5432/cairn
+
+env:
+  profile: /app/.venv/lib/python3.13/site-packages/cairn/profiles/secure.toml   # REQUIRED (#2296)
+
+secrets:
+  obsJwtSecret: CHANGE-ME-openssl-rand-hex-32
+  obsApiPasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$hdL7wUwAlItMM+v3pVfHxA$R1VstcN4/3bgfIjAOEmkCALYtjAqE4bjysDdB7zSit8"
+
+artifacts:
+  s3:
+    enabled: true
+    endpoint: ""
+    bucket: cairn-artifacts
+    region: eu-central-1

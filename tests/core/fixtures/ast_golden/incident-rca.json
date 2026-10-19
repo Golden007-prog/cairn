@@ -1,0 +1,287 @@
+{
+  "budget": null,
+  "critique": null,
+  "description": "Deterministic-evidence root cause analysis. Operators in\nobs-operator-clickstack, obs-operator-blast-radius, and obs-operator-git\ngather evidence in parallel; a single LLM synthesis step produces a\nstructured RCA from state.findings \u2014 it has no tools and cannot\nre-investigate.\n",
+  "evals": null,
+  "flow": {
+    "nodes": {
+      "synthesize": {
+        "capabilities": [],
+        "knowledge": [],
+        "max_iterations": 8,
+        "model": "gpt-4o-mini",
+        "output_schema": null,
+        "prompt_section": "synthesize",
+        "retry": null,
+        "type": "prompt"
+      }
+    },
+    "root": {
+      "children": [
+        {
+          "children": [
+            {
+              "approval": null,
+              "artifacts": null,
+              "budget": null,
+              "execution": null,
+              "id": "query-error-logs",
+              "input": {
+                "level": "ERROR",
+                "limit": 100,
+                "service": "$input.service",
+                "time_range": "1h"
+              },
+              "operator": "clickstack/query_logs",
+              "output": {
+                "count": "$state.findings.log_count",
+                "logs": "$state.findings.logs"
+              },
+              "policy": null,
+              "ref": null,
+              "resources": null,
+              "secrets": [],
+              "type": "operation",
+              "version": ">= 0.1",
+              "with_": {}
+            },
+            {
+              "approval": null,
+              "artifacts": null,
+              "budget": null,
+              "execution": null,
+              "id": "query-recent-traces",
+              "input": {
+                "limit": 20,
+                "service": "$input.service",
+                "time_range": "1h"
+              },
+              "operator": "clickstack/query_traces",
+              "output": {
+                "count": "$state.findings.trace_count",
+                "traces": "$state.findings.traces"
+              },
+              "policy": null,
+              "ref": null,
+              "resources": null,
+              "secrets": [],
+              "type": "operation",
+              "version": ">= 0.1",
+              "with_": {}
+            },
+            {
+              "approval": null,
+              "artifacts": null,
+              "budget": null,
+              "execution": null,
+              "id": "query-recent-metrics",
+              "input": {
+                "limit": 100,
+                "name": "",
+                "service": "$input.service"
+              },
+              "operator": "clickstack/query_metrics",
+              "output": {
+                "count": "$state.findings.metric_count",
+                "metrics": "$state.findings.metrics"
+              },
+              "policy": null,
+              "ref": null,
+              "resources": null,
+              "secrets": [],
+              "type": "operation",
+              "version": ">= 0.1",
+              "with_": {}
+            },
+            {
+              "approval": null,
+              "artifacts": null,
+              "budget": null,
+              "execution": null,
+              "id": "get-service-topology",
+              "input": {
+                "limit": 50,
+                "service": "$input.service",
+                "time_range": "1h"
+              },
+              "operator": "clickstack/get_topology",
+              "output": {
+                "downstream": "$state.findings.topology.downstream",
+                "edges": "$state.findings.topology.edges",
+                "upstream": "$state.findings.topology.upstream"
+              },
+              "policy": null,
+              "ref": null,
+              "resources": null,
+              "secrets": [],
+              "type": "operation",
+              "version": ">= 0.1",
+              "with_": {}
+            },
+            {
+              "approval": null,
+              "artifacts": null,
+              "budget": null,
+              "execution": null,
+              "id": "search-runbooks",
+              "input": {
+                "corpus": "runbooks",
+                "query": "$input.symptom",
+                "top_k": 5
+              },
+              "operator": "rag/search",
+              "output": {
+                "hits": "$state.findings.runbooks"
+              },
+              "policy": null,
+              "ref": null,
+              "resources": null,
+              "secrets": [],
+              "type": "operation",
+              "version": ">= 0.1",
+              "with_": {}
+            },
+            {
+              "approval": null,
+              "artifacts": null,
+              "budget": null,
+              "execution": null,
+              "id": "recall-similar-incidents",
+              "input": {
+                "query": "$input.symptom",
+                "store": "similar_incidents",
+                "top_k": 5
+              },
+              "operator": "memory/search",
+              "output": {
+                "hits": "$state.findings.prior_incidents"
+              },
+              "policy": null,
+              "ref": null,
+              "resources": null,
+              "secrets": [],
+              "type": "operation",
+              "version": ">= 0.1",
+              "with_": {}
+            }
+          ],
+          "type": "parallel"
+        },
+        {
+          "children": [
+            {
+              "approval": null,
+              "artifacts": null,
+              "budget": null,
+              "execution": null,
+              "id": "compute-blast-radius",
+              "input": {
+                "service": "$input.service",
+                "time_range": "1h"
+              },
+              "operator": "blast-radius/compute",
+              "output": {
+                "affected_services": "$state.findings.blast_radius.affected",
+                "graph": "$state.findings.blast_radius.graph",
+                "summary": "$state.findings.blast_radius.summary"
+              },
+              "policy": null,
+              "ref": null,
+              "resources": null,
+              "secrets": [],
+              "type": "operation",
+              "version": ">= 0.1",
+              "with_": {}
+            },
+            {
+              "approval": null,
+              "artifacts": null,
+              "budget": null,
+              "execution": null,
+              "id": "correlate-deploy",
+              "input": {
+                "max_lag_minutes": 60,
+                "service": "$input.service",
+                "time_range": "6h"
+              },
+              "operator": "git/correlate",
+              "output": {
+                "confidence": "$state.findings.change_correlation.confidence",
+                "correlated": "$state.findings.change_correlation.correlated",
+                "deploy_time": "$state.findings.change_correlation.deploy_time",
+                "error_onset": "$state.findings.change_correlation.error_onset",
+                "lag_human": "$state.findings.change_correlation.lag_human",
+                "lag_seconds": "$state.findings.change_correlation.lag_seconds",
+                "reasoning": "$state.findings.change_correlation.reasoning",
+                "suspect_deploy": "$state.findings.change_correlation.suspect_deploy"
+              },
+              "policy": null,
+              "ref": null,
+              "resources": null,
+              "secrets": [],
+              "type": "operation",
+              "version": ">= 0.1",
+              "with_": {}
+            }
+          ],
+          "type": "parallel"
+        },
+        {
+          "ref": "synthesize",
+          "type": "action"
+        },
+        {
+          "config": {
+            "finding_key": "synthesize"
+          },
+          "function": "parse_synthesize_output",
+          "outputs": [
+            "symptom",
+            "timeline",
+            "root_cause",
+            "evidence",
+            "blast_radius",
+            "suggested_actions"
+          ],
+          "type": "python_node"
+        },
+        {
+          "config": {},
+          "function": "assemble_incident_timeline",
+          "outputs": [
+            "timeline"
+          ],
+          "type": "python_node"
+        }
+      ],
+      "type": "sequence"
+    },
+    "source": "behavior_tree",
+    "type": "state_machine"
+  },
+  "input_schema": "schema://incident/AlertContext",
+  "knowledge": [],
+  "models": null,
+  "module": "investigate",
+  "name": "incident-rca",
+  "output": {
+    "format": "structured_json",
+    "schema_name": "RCA"
+  },
+  "output_schema": "schema://incident/RCA",
+  "tags": [
+    "data:logs",
+    "data:traces",
+    "data:metrics",
+    "data:errors",
+    "flow:state_machine",
+    "flow:operation-driven"
+  ],
+  "tools": {
+    "dynamic": [],
+    "forbidden": [],
+    "required": [],
+    "tool_k": 5
+  },
+  "version": "2.0.0"
+}

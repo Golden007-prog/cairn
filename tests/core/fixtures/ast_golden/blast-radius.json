@@ -1,0 +1,63 @@
+{
+  "budget": null,
+  "critique": null,
+  "description": "Measured impact across the service-call graph: which services are actually\naffected, classified direct / upstream / downstream, with error and call counts\nattached as evidence.\n\nDeterministic \u2014 `blast-radius/compute` reads the call graph and the counts. No\nmodel is asked to guess which services are affected, which is the property that\nmakes this citable. It is the same operator `incident/incident-rca` runs as one\nof its evidence steps, offered on its own because \"what else depends on\ncheckout?\" is a question you ask without having an incident open.\n",
+  "evals": null,
+  "flow": {
+    "nodes": {},
+    "root": {
+      "children": [
+        {
+          "approval": null,
+          "artifacts": null,
+          "budget": null,
+          "execution": null,
+          "id": "compute-blast-radius",
+          "input": {
+            "service": "$input.service",
+            "time_range": "$default($input.time_range, \"1h\")"
+          },
+          "operator": "blast-radius/compute",
+          "output": {
+            "affected_services": "$state.findings.blast_radius_affected",
+            "graph": "$state.findings.blast_radius_graph",
+            "incident_service": "$state.findings.blast_radius_service",
+            "summary": "$state.findings.blast_radius_summary",
+            "time_range": "$state.findings.blast_radius_window"
+          },
+          "policy": null,
+          "ref": null,
+          "resources": null,
+          "secrets": [],
+          "type": "operation",
+          "version": ">= 0.1",
+          "with_": {}
+        }
+      ],
+      "type": "sequence"
+    },
+    "source": "behavior_tree",
+    "type": "state_machine"
+  },
+  "input_schema": "schema://incident/ServiceScope",
+  "knowledge": [],
+  "models": null,
+  "module": "investigate",
+  "name": "blast-radius",
+  "output": null,
+  "output_schema": null,
+  "tags": [
+    "data:traces",
+    "data:errors",
+    "flow:state_machine",
+    "flow:operation-driven",
+    "domain:incident"
+  ],
+  "tools": {
+    "dynamic": [],
+    "forbidden": [],
+    "required": [],
+    "tool_k": 5
+  },
+  "version": "0.1.0"
+}

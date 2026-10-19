@@ -1,0 +1,28 @@
+# LiteLLM proxy config for the cairn LLM gateway (#182).
+#
+# cairn routes every governed LLM call through this proxy when
+# LLM_GATEWAY=proxy + LLM_GATEWAY_URL=http://litellm:4000.
+# cairn sends litellm-style model strings with a provider prefix
+# (LLM_GATEWAY_ADD_PROVIDER_PREFIX defaults true → "openai/gpt-4o-mini"), so a
+# single wildcard entry passes every model through to its provider verbatim —
+# no need to enumerate models here. Add explicit entries below to pin a model,
+# cap it, or fan a virtual name out to a different backend.
+#
+# The proxy authenticates cairn with LITELLM_MASTER_KEY and calls the upstream
+# provider with its OWN key (OPENAI_API_KEY in the container env) — so the real
+# provider key never leaves the gateway.
+
+model_list:
+  # Catch-all: forward any requested model to its provider as-is.
+  - model_name: "*"
+    litellm_params:
+      model: "*"
+
+
+litellm_settings:
+  # Match cairn's client — silently drop provider-unsupported params rather than error.
+  drop_params: true
+
+general_settings:
+  # Callers (cairn) must present this as their api_key; injected from the env.
+  master_key: os.environ/LITELLM_MASTER_KEY

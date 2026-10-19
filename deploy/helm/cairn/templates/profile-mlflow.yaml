@@ -1,0 +1,87 @@
+{{- if .Values.profiles.mlflow.enabled }}
+{{/*
+compose `--profile mlflow` — experiment tracking + model registry, light on
+purpose: sqlite backend-store on one volume, no extra Postgres. Bring-your-own
+managed MLflow needs no profile at all — set profiles.mlflow.trackingUri and
+leave `enabled` false.
+
+Proxied artifacts (mlflow-artifacts:/) so a REMOTE trainer uploads THROUGH the
+server instead of being handed a server-local path it cannot write.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cairn.fullname" . }}-mlflow
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mlflow
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate     # RWO volume
+  selector:
+    matchLabels:
+      {{- include "cairn.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mlflow
+  template:
+    metadata:
+      labels:
+        {{- include "cairn.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mlflow
+    spec:
+      containers:
+        - name: mlflow
+          image: {{ .Values.profiles.mlflow.image }}
+          args:
+            - mlflow
+            - server
+            - --host=0.0.0.0
+            - --port=5000
+            - --backend-store-uri=sqlite:////mlflow/mlflow.db
+            - --default-artifact-root=mlflow-artifacts:/
+            - --artifacts-destination=/mlflow/artifacts
+            # MLflow 3.x DNS-rebinding guard rejects non-local Host headers; the
+            # in-cluster name must be named explicitly or every call 403s with
+            # "Invalid Host header" (caught live on compose).
+            - --allowed-hosts={{ include "cairn.fullname" . }}-mlflow:5000,localhost,127.0.0.1
+          ports:
+            - name: http
+              containerPort: 5000
+          volumeMounts:
+            - name: mlflow-data
+              mountPath: /mlflow
+      volumes:
+        - name: mlflow-data
+          persistentVolumeClaim:
+            claimName: {{ include "cairn.fullname" . }}-mlflow
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "cairn.fullname" . }}-mlflow
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.profiles.mlflow.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cairn.fullname" . }}-mlflow
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mlflow
+spec:
+  ports:
+    - name: http
+      port: 5000
+      targetPort: http
+  selector:
+    {{- include "cairn.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mlflow
+{{- end }}

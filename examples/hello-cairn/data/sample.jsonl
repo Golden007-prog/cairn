@@ -1,0 +1,20 @@
+{"id": 1, "text": "The soup arrived hot and the bread was fresh.", "label": "positive"}
+{"id": 2, "text": "Delivery took two hours longer than promised.", "label": "negative"}
+{"id": 3, "text": "The packaging was fine, nothing special.", "label": "neutral"}
+{"id": 4, "text": "Best noodles I have had in months.", "label": "positive"}
+{"id": 5, "text": "The order was missing the side salad.", "label": "negative"}
+{"id": 6, "text": "Portion size was about what I expected.", "label": "neutral"}
+{"id": 7, "text": "The courier was polite and quick.", "label": "positive"}
+{"id": 8, "text": "My drink had spilled inside the bag.", "label": "negative"}
+{"id": 9, "text": "I ordered the same dish as last week.", "label": "neutral"}
+{"id": 10, "text": "The dessert was a lovely surprise.", "label": "positive"}
+{"id": 11, "text": "The curry was far too salty to finish.", "label": "negative"}
+{"id": 12, "text": "Paid with the app, it worked as usual.", "label": "neutral"}
+{"id": 13, "text": "Everything was still warm when it came.", "label": "positive"}
+{"id": 14, "text": "The tracking map never updated.", "label": "negative"}
+{"id": 15, "text": "The menu has not changed since spring.", "label": "neutral"}
+{"id": 16, "text": "Great value for a weeknight dinner.", "label": "positive"}
+{"id": 17, "text": "The rice was undercooked again.", "label": "negative"}
+{"id": 18, "text": "Arrived at the time the app estimated.", "label": "neutral"}
+{"id": 19, "text": "The new vegetarian option is excellent.", "label": "positive"}
+{"id": 20, "text": "Support never answered my refund request.", "label": "negative"}

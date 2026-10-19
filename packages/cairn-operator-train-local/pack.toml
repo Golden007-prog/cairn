@@ -1,0 +1,60 @@
+# obs-operator-train-local — declarative manifest (ADR-0127 D4, #2572 WP3).
+#
+# A LoRA fine-tune on CPU: train/lora (the operation face of contract
+# train.finetune/1.0.0, also shipped as the ml stage `train.lora`) and
+# train/eval-loss (scores a saved adapter). The training stack is the [train]
+# extra; without it the pack still imports and registers, and both operations
+# refuse at run naming the extra. The [operator."…"] tables below are GENERATED
+# from the classes (#1539 — `cairn pack sync`).
+
+[pack]
+name        = "obs-operator-train-local"
+version     = "0.1.0"
+type        = "operator"
+description = "LoRA fine-tuning on CPU — provides train.finetune (train/lora, stage train.lora) and train/eval-loss."
+kind        = "operator"
+publisher   = "cairn"
+trust_level = "builtin"
+
+[compat]
+cairn_engine = ">=0.1.0"
+
+[operator."train/eval-loss"]
+version       = "0.1.0"
+input_schema  = "EvalLossInput"
+output_schema = "EvalLossOutput"
+long_running = false
+requires_gpu = false
+supports_cancel = false
+supports_heartbeat = false
+supports_mock = true
+risk      = "read_only"
+executors = ["in_process"]
+implements = ["contract://train.eval_loss/1.0.0"]
+
+[operator."train/eval-loss".capabilities]
+provides = ["train.eval_loss"]
+
+[operator."train/eval-loss".reports]
+scalars = ["eval_loss", "tokens_seen"]
+
+[operator."train/lora"]
+version       = "0.1.0"
+input_schema  = "TrainLoraInput"
+output_schema = "TrainLoraOutput"
+long_running = false
+requires_gpu = false
+supports_cancel = false
+supports_heartbeat = false
+supports_mock = true
+risk      = "external_write"
+executors = ["in_process"]
+implements = ["contract://train.finetune/1.0.0"]
+
+[operator."train/lora".capabilities]
+provides = ["train.finetune"]
+
+[operator."train/lora".reports]
+stages  = ["train"]
+series  = [{ name = "loss", unit = "" }]
+scalars = ["train_loss", "eval_loss", "tokens_seen", "steps_run"]

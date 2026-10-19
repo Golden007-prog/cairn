@@ -1,0 +1,20 @@
+# A shared contract distribution (#2243 V2, ADR-0111), built like cairn-contracts-eval: DATA
+# ONLY — no Python package, no entry points. The root installs it NON-editable
+# (`{ workspace = true, editable = false }`): an editable install is refused as not data-only.
+[project]
+name = "cairn-contracts-memory"
+version = "1.0.0"
+description = "Shared contract definitions for the memory capability domain (memory.search, memory.write)."
+requires-python = ">=3.12"
+dependencies = []
+license = { text = "Apache-2.0" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.hatch.build.targets.wheel.force-include]
+"definitions" = "cairn_contracts/cairn-contracts-memory"

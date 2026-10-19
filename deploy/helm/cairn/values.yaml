@@ -1,0 +1,233 @@
+# cairn Helm chart — default values (ADR-0104 D4, #26).
+#
+# This file is the CLUSTER twin of .env + the compose profiles.
+# Every CAIRN_* variable compose sets on the `server` service is set here too;
+# tests/deploy/test_helm_chart.py fails if the two drift apart.
+#
+# Validate a values file BEFORE installing:
+#   cairn deploy doctor --values my-values.yaml --strict
+
+# ── image ────────────────────────────────────────────────────────────────
+image:
+  # Published by .github/workflows/engine-image.yml. The GHCR package is
+  # PRIVATE until the owner flips it public (see README "Owner steps"); until
+  # then set `imagePullSecrets` below.
+  repository: ghcr.io/cairndev-sh/cairn-engine
+  # Empty → Chart.appVersion. PIN A DIGEST OR TAG IN PROD — `--strict` fails
+  # on `latest` because a rolling tag makes "what is deployed" unanswerable.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# e.g. [{name: ghcr-pull}] — required while the GHCR package is private.
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ── runtime ──────────────────────────────────────────────────────────────
+# dbos      — the durable single-process runtime prod runs (no worker, no Temporal)
+# temporal  — server submits, a separate worker executes (needs profiles.temporal)
+# inprocess — no durability; dev only
+runtime: dbos
+
+# postgres | sqlite | memory. `memory` with a durable runtime is refused by
+# `cairn deploy doctor` — DBOS recovery would replay the whole graph (#390).
+checkpointer: postgres
+
+# ── control-plane server ─────────────────────────────────────────────────
+server:
+  replicaCount: 1
+  port: 9090
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      memory: 2Gi   # the compose `mem_limit: 2g` ceiling (#1516)
+  # ~/.cairn — the SQLite-backed config stores (policies/triggers/schedules/
+  # connections) that do not yet honour CAIRN_STORAGE. RWO, so keep replicaCount 1
+  # until the storage-unification epic moves them onto Postgres.
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+# ── Temporal worker (runtime: temporal only) ─────────────────────────────
+worker:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ── pull worker — D2 (#565), NOT implemented by this chart ───────────────
+# D2 builds `cairn worker --pull`: a machine that dials OUT to the control
+# plane, claims work and reports over the job channel. The chart ships the
+# DEPLOYMENT shape only; the command is yours to supply once D2 lands, so this
+# chart never has to guess a flag that does not exist yet.
+#   pullWorker:
+#     enabled: true
+#     command: ["cairn", "worker", "--pull", "--control-plane", "https://cairn.example.com"]
+pullWorker:
+  enabled: false
+  command: []          # REQUIRED when enabled — rendering fails without it
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ── Postgres: bundled StatefulSet XOR an external DSN ────────────────────
+# Exactly one. Both, or neither, fails at render time (_helpers.tpl).
+postgres:
+  enabled: true
+  image: pgvector/pgvector:pg16
+  user: cairn
+  database: cairn
+  password: ""         # REQUIRED when enabled (openssl rand -hex 16)
+  port: 5432
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+  persistence:
+    size: 20Gi
+    storageClass: ""
+  external:
+    # postgresql://user:password@host:5432/cairn — a managed Postgres (RDS,
+    # Cloud SQL, Neon). pgvector is only needed for the RAG tier.
+    dsn: ""
+
+# ── Ingress — replaces Caddy (TLS via cert-manager) ──────────────────────
+ingress:
+  enabled: true
+  className: nginx
+  host: ""             # REQUIRED — this is the chart's CADDY_DOMAIN
+  path: /
+  pathType: Prefix
+  certManager:
+    # Empty → no cert-manager annotation (bring your own TLS secret).
+    clusterIssuer: letsencrypt-prod
+  tls:
+    enabled: true
+    secretName: cairn-tls
+  # #774 — Caddy needed `flush_interval -1` or the console's live-run SSE sat
+  # buffered in the proxy while the run completed invisibly. nginx buffers the
+  # same way; these two annotations are that fix, and removing them
+  # reintroduces the bug.
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+
+service:
+  type: ClusterIP
+  port: 9090
+
+# ── secrets ──────────────────────────────────────────────────────────────
+# Either supply the values here (rendered into a chart-managed Secret) or point
+# at an existing one. The Secret is applied as the LAST envFrom source, so any
+# key it carries overrides the ConfigMap — that is how you keep a DSN with an
+# embedded password out of a ConfigMap (CAIRN_STORAGE etc.; an OBS_-spelled
+# Secret still wins until 1.0 — README, "The Secret wins over the ConfigMap").
+secrets:
+  existingSecret: ""
+  obsJwtSecret: ""          # REQUIRED — auth is ON (issue #2)
+  obsApiPasswordHash: ""    # REQUIRED — `cairn remote hash-password`
+  openaiApiKey: ""
+  # remote/exec + durable remote-job polling (#565/#918) — server AND worker.
+  sshPrivateKey: ""
+
+# ── environment (mirrors .env) ───────────────────────────────
+env:
+  backend: mock             # CAIRN_BACKEND — mock | openai
+  apiUser: admin            # CAIRN_API_USER
+  requireAuth: true         # CAIRN_REQUIRE_AUTH
+  profile: ""               # CAIRN_PROFILE — REQUIRED (#2296): the deployment profile; the chart refuses to render without it
+  # Anything else, verbatim, into the ConfigMap.
+  extra: {}
+
+# ── artifacts (the dbos-postgres tier's MinIO/S3 fields) ─────────────────
+artifacts:
+  s3:
+    enabled: false
+    endpoint: ""            # CAIRN_ARTIFACT_S3_ENDPOINT
+    bucket: cairn-artifacts
+    region: us-east-1
+
+# ── telemetry ────────────────────────────────────────────────────────────
+# Point straight at your cluster's collector or a managed backend. The chart
+# does NOT run a collector (see profiles.otel).
+observability:
+  otlp:
+    endpoint: ""
+    headers: ""
+
+# ── compose profiles, mirrored 1:1 ───────────────────────────────────────
+# These are exactly the profiles docker-compose.yml defines — no
+# more, no fewer (tests/deploy/test_helm_chart.py asserts the sets match).
+#
+# Four are IMPLEMENTED by this chart because they are cairn's own topology:
+#   temporal · nats · mlflow · backup
+# Six are DELEGATED: Kubernetes already has a maintained chart for each, and
+# vendoring a worse copy would be the "build infra with no consumer" the
+# verify-upstream gate exists to stop. Enabling one fails at render time with
+# the chart to use instead — a loud refusal, never a silent no-op.
+profiles:
+  temporal:
+    enabled: false
+    image: temporalio/auto-setup:1.26
+    ui:
+      enabled: true
+      image: temporalio/ui:2.34.0
+    address: ""             # empty → the bundled service
+  nats:
+    enabled: false
+    image: nats:2.10-alpine
+    storage: 5Gi
+  mlflow:
+    enabled: false
+    image: ghcr.io/mlflow/mlflow:latest
+    storage: 20Gi
+    # Empty + enabled → the bundled service. Set it to use a managed MLflow
+    # WITHOUT enabling the profile.
+    trackingUri: ""
+  backup:
+    enabled: false
+    schedule: "0 2 * * *"
+    keep: 14
+    storage: 20Gi
+  # ── delegated ──
+  dedicated-temporal-db:
+    enabled: false          # → the official temporal chart, or your own Postgres
+  metaflow-service:
+    enabled: false          # → outerbounds/metaflow-tools chart
+  otel:
+    enabled: false          # → open-telemetry/opentelemetry-collector chart
+  infisical:
+    enabled: false          # → infisical/infisical-standalone chart
+  observability:
+    enabled: false          # → prometheus-community/kube-prometheus-stack
+  llm-gateway:
+    enabled: false          # → berriai/litellm-helm
+
+# Standard knobs.
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+podSecurityContext: {}
+securityContext: {}

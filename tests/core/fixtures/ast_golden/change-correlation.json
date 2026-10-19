@@ -1,0 +1,69 @@
+{
+  "budget": null,
+  "critique": null,
+  "description": "Ties an error onset to the deploy that preceded it \u2014 deterministically, from\nthe deploy history, with the lag stated so you can judge the claim yourself.\n\n`git/correlate` compares when errors started against when things shipped and\nreports a confidence, never a certainty. The same operator\n`incident/incident-rca` runs as evidence, offered on its own because \"did the\n2pm deploy cause this?\" is a question with a yes/no answer that does not need a\nnarrative around it.\n",
+  "evals": null,
+  "flow": {
+    "nodes": {},
+    "root": {
+      "children": [
+        {
+          "approval": null,
+          "artifacts": null,
+          "budget": null,
+          "execution": null,
+          "id": "correlate-deploy",
+          "input": {
+            "max_lag_minutes": "$default($input.max_lag_minutes, 60)",
+            "service": "$input.service",
+            "time_range": "$default($input.time_range, \"6h\")"
+          },
+          "operator": "git/correlate",
+          "output": {
+            "confidence": "$state.findings.change_confidence",
+            "correlated": "$state.findings.change_correlated",
+            "deploy_time": "$state.findings.change_deploy_time",
+            "deploys_considered": "$state.findings.change_deploys_considered",
+            "error_count": "$state.findings.change_error_count",
+            "error_onset": "$state.findings.change_error_onset",
+            "lag_human": "$state.findings.change_lag_human",
+            "lag_seconds": "$state.findings.change_lag_seconds",
+            "reason": "$state.findings.change_reason",
+            "reasoning": "$state.findings.change_reasoning",
+            "suspect_deploy": "$state.findings.change_suspect_deploy"
+          },
+          "policy": null,
+          "ref": null,
+          "resources": null,
+          "secrets": [],
+          "type": "operation",
+          "version": ">= 0.1",
+          "with_": {}
+        }
+      ],
+      "type": "sequence"
+    },
+    "source": "behavior_tree",
+    "type": "state_machine"
+  },
+  "input_schema": "schema://incident/ServiceScope",
+  "knowledge": [],
+  "models": null,
+  "module": "investigate",
+  "name": "change-correlation",
+  "output": null,
+  "output_schema": null,
+  "tags": [
+    "data:errors",
+    "flow:state_machine",
+    "flow:operation-driven",
+    "domain:incident"
+  ],
+  "tools": {
+    "dynamic": [],
+    "forbidden": [],
+    "required": [],
+    "tool_k": 5
+  },
+  "version": "0.1.0"
+}

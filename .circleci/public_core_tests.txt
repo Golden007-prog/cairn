@@ -1,0 +1,282 @@
+# The tests/core files the PUBLIC SET must pass (ADR-0120 D1, #2424): run by the
+# CircleCI `public` job against an install with no domain pack, official operator pack,
+# platform package, cairn-ask or asyncssh. One file per line, sorted; a file that starts
+# to need a pack leaves the list (and says why below) or is rewritten against the example
+# pack. tests/core/test_public_core_list.py keeps the list well-formed.
+#
+test_618_restart_durability.py
+test_account.py
+test_account_resolution.py
+test_action_fail_loud.py
+test_approval_chokepoint.py
+test_approval_gate_e2e.py
+test_approval_policy_wiring.py
+test_approval_reaper.py
+test_approval_resolver.py
+test_approval_surface.py
+test_architecture_boundaries.py
+test_assemble_dataset_prep_report.py
+test_assemble_serve_report.py
+test_audit.py
+test_auth_decorator.py
+test_auth_me_features.py
+test_auth_surface_hardening.py
+test_backend_connections.py
+test_backend_selection.py
+test_batch_cpu_budget.py
+test_bridge_terminal_payload.py
+test_budget_reservation.py
+test_bus.py
+test_bus_bridge.py
+test_bus_postgres.py
+test_bus_retention.py
+test_cairn_client_contract.py
+test_capture_additions.py
+test_change_scope.py
+test_checkpoint_relay_resume.py
+test_checkpointer_pool.py
+test_cli_dev.py
+test_cli_remote_attach.py
+test_cluster.py
+test_compiler_from_pack.py
+test_compute_lifecycle_sweep.py
+test_compute_seam.py
+test_connection_probe.py
+test_connection_probe_ssrf.py
+test_connection_secret_injection.py
+test_connections.py
+test_connections_pg_store.py
+test_continuous_eval.py
+test_contract_discovery.py
+test_contract_docs.py
+test_contract_loop_and_remote_job.py
+test_contract_resolution_cache.py
+test_cost_capture.py
+test_dataflow_resources.py
+test_dataset_gate_condition.py
+test_dataset_registry.py
+test_dbos_runtime.py
+test_deploy_check.py
+test_deploy_check_compute_ssh.py
+test_deploy_check_values.py
+test_deployment_profile_required.py
+test_dispatch_coordination.py
+test_dispatcher_preset.py
+test_distribution_names.py
+test_doctor_composition.py
+test_domain_pack_wheels.py
+test_durable_remote_job.py
+test_durable_restart.py
+test_engine_compiler_operation.py
+test_engine_door.py
+test_engine_map.py
+test_engine_registry.py
+test_env_inventory.py
+test_eval.py
+test_eval_comparison.py
+test_eval_scorecard.py
+test_event_seq_race.py
+test_example_pipeline_governance.py
+test_executor_mcp_tool.py
+test_expr.py
+test_feature_store.py
+test_features.py
+test_fingerprint_store.py
+test_flatten.py
+test_flatten_equivalence.py
+test_flow_gate_split.py
+test_flow_leg_gate_guard.py
+test_gate_decision_identity.py
+test_gate_notifications.py
+test_gateway.py
+test_guards_citation.py
+test_guards_critique.py
+test_inflow_policy_boundary.py
+test_init_pack_is_data_only.py
+test_inline_2b_sugar.py
+test_inline_operations.py
+test_input_presets.py
+test_installed_pack_manifests.py
+test_installed_workflows_listing.py
+test_interrupts.py
+test_invites.py
+test_job_channel.py
+test_job_channel_nats.py
+test_job_executor.py
+test_judge_agreement.py
+test_judge_registry.py
+test_knowledge_corpora.py
+test_knowledge_injection.py
+test_launch_handle.py
+test_leadership.py
+test_learning_gate.py
+test_leg_lineage_resolution.py
+test_leg_readopt.py
+test_leg_retry.py
+test_light_compose.py
+test_list_payload_projection.py
+test_live_channel_env.py
+test_llm_factory.py
+test_llm_redaction_chokepoint.py
+test_mcp_server_layering.py
+test_memory_capture_gate.py
+test_migrations.py
+test_model_catalogs.py
+test_no_loop_blocking.py
+test_node_events.py
+test_node_record.py
+test_node_stream_gated.py
+test_oauth_authlib.py
+test_oauth_broker.py
+test_oauth_login.py
+test_oauth_pg_store.py
+test_observability_phase1.py
+test_operation_context_stores.py
+test_operator_binding.py
+test_operator_binding_validate.py
+test_operator_config.py
+test_operator_contract_reexports.py
+test_operator_executor.py
+test_operator_manifest_sync.py
+test_operator_manifests_load.py
+test_operator_protocol.py
+test_operator_registry.py
+test_operator_reports.py
+test_operator_testing_harness.py
+test_ops_mcp.py
+test_pack_assets_by_convention.py
+test_pack_design_docs.py
+test_pack_manifest_drift.py
+test_pack_visibility.py
+test_password_hash_check.py
+test_pg_pool_max.py
+test_pg_shared_pool.py
+test_pg_store_init_race.py
+test_pipeline_checkpoint_pull.py
+test_pipeline_drift_guard.py
+test_pipeline_durability.py
+test_pipeline_gates.py
+test_pipeline_leg_timeout.py
+test_pipeline_loop_task_legs.py
+test_pipeline_loop_wires.py
+test_pipeline_service_doors.py
+test_pipeline_task_leg.py
+test_pipeline_task_resume.py
+test_pipeline_workflow.py
+test_pipeline_workflow_parallel.py
+test_plan_bundle.py
+test_policy_capability_attachment.py
+test_policy_named_environment.py
+test_policy_pg_store.py
+test_postgres_run_store.py
+test_prep_gate_condition.py
+test_production_profile.py
+test_profile_backends.py
+test_profile_curation.py
+test_profile_pg_store.py
+test_public_core_boundary.py
+test_public_core_list.py
+test_public_profiles.py
+test_rag_catalog_postgres.py
+test_reconciler_heartbeat.py
+test_redact.py
+test_ref_normaliser.py
+test_registry_install_pg_store.py
+test_remote_job_cancel.py
+test_remote_job_control.py
+test_remote_job_store.py
+test_remote_job_store_postgres.py
+test_report_ingest.py
+test_resume_fail_closed.py
+test_review_records.py
+test_review_workspace_scope.py
+test_router_providers.py
+test_run_bundle.py
+test_run_events_streaming.py
+test_run_ingest_api.py
+test_run_reconciler.py
+test_run_store.py
+test_run_store_corrupt_row.py
+test_run_store_status_authoritative.py
+test_run_trace_context.py
+test_runtime.py
+test_runtime_from_profile.py
+test_schedule_pg_store.py
+test_scheduler_list.py
+test_scoring_core.py
+test_secrets.py
+test_secrets_pg_store.py
+test_secure_profile.py
+test_seed_providers.py
+test_server_lifespan_boot.py
+test_settings.py
+test_sharded_resume.py
+test_signup.py
+test_single_file_db.py
+test_status_transitions.py
+test_status_vocab.py
+test_storage_resolver.py
+test_subgraph_gate.py
+test_subgraph_gate_durable.py
+test_suggest.py
+test_suggestion_actuation.py
+test_target_concurrency.py
+test_target_count_store_side.py
+test_task_leg_dataset_refs.py
+test_template_content_hash.py
+test_temporal_resume_delivery.py
+test_trace_content_gate.py
+test_triggers_auth.py
+test_triggers_store_postgres.py
+test_two_tenant_isolation.py
+test_venv_overlay.py
+test_workflow_config_store_pg_init.py
+test_workflow_registry_rename.py
+test_workspace_boundary.py
+test_workspace_indexed_columns.py
+test_workspace_lifecycle.py
+test_workspace_pg_stores.py
+test_workspace_triggers_jobs.py
+test_workspace_variables.py
+#
+# Not yet on the public set (the rest of #2424: move with the pack to the platform, or
+# rewrite against examples/hello-cairn):
+#   test_openapi_contract.py: the committed spec is the FULL app's (platform routers mounted); the public app's spec is a Phase 2 artefact (#2428); it also anchors cairn-client to that spec (#2424)
+#   test_app_client.py: one test reaches the answer_knowledge tool (cairn-ask, private)
+#   test_ask_knowledge.py: imports cairn_platform.ask (the platform's Ask wiring, ADR-0134 D6)
+#   test_demo_seed_api.py: the platform-demo seed
+#   test_invoke_operator_core.py: the task-leg case runs an official operator
+#   test_listing_off_loop.py: a wall-clock bound measured on a developer machine
+#   test_operator_load_once.py: asserts an official operator is in the real set
+#   test_operator_loader.py: attaches metadata from the official packs
+#   test_pack_dead_assets_removed.py: walks the domain packs' assets
+#   test_pack_dev_loop.py: drives a domain pack through CAIRN_PACK_PATH
+#   test_pipeline_discovery_memo.py: discovers the domain packs' pipelines
+#   test_pipeline_payload_baseline.py: baseline payloads of domain-pack pipelines
+#   test_policy_engine.py: policies over official operators (prod rollback, high-risk actions)
+#   test_subgraph_mapping.py: subgraphs a domain-pack flow
+#   test_typed_composition.py: composes domain-pack flows
+#
+# Left the public set with the console routers (#2427: they are the platform's now; the full
+# job, which installs the platform, still runs them):
+#   test_account_postgres_invites.py: GET /admin/invites (the platform's admin router)
+#   test_admin_platform_hooks.py: POST /demo/seed (the platform's admin router)
+#   test_admin_users_api.py: /admin/users (the platform's admin router)
+#   test_admin_users_env_admin.py: /admin/users (the platform's admin router)
+#   test_catalog.py: imports the /ui/api routers (cairn_platform.routers.webui)
+#   test_config_crud.py: imports the /ui/api routers (cairn_platform.routers.webui)
+#   test_connection_account_isolation.py: drives /ui/api/connections (the platform's webui provider)
+#   test_console_config_gateway.py: drives /console/api (the platform's console provider)
+#   test_console_routes_postgres_tier.py: drives /ui/api (the platform's webui provider)
+#   test_features_api.py: drives /admin/features (the platform's features provider)
+#   test_governance_config_admin_gate.py: walks the mounted /ui/api routes (the platform's webui provider)
+#   test_mcp_connection_tools.py: imports the /ui/api routers (cairn_platform.routers.webui)
+#   test_model_roles.py: imports the /ui/api routers (cairn_platform.routers.webui)
+#   test_secrets_store.py: imports the /ui/api routers (cairn_platform.routers.webui)
+#
+# Read a private piece of the monorepo (#2424, owner decisions 2026-10-13; the full job runs
+# them). Where only some cases did, those cases moved and the rest of the file stays listed:
+#   test_agent_files_single_source.py: .claude/skills, .codex/hooks.json and the hook registrations (agent files stay private)
+#   test_batch_inference_pipeline.py: the serving pack's pipeline (test_example_pipeline_governance.py checks the example's)
+#   test_console_workspace_scoping.py: reads console/src/lib/api.ts against the platform's routers
+#   test_prod_deploy_files.py: the production stack (compose, Caddyfile, .env.example), the Makefile, docker-compose.dev.yml, .claude/launch.json, the console image stage

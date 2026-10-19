@@ -1,0 +1,23 @@
+# flows/engine-check.yaml — a data flow on the builtin engine (#2423).
+#
+# A flow is a list of stages the dataflow engine runs as ONE governed leg. The
+# public core installs exactly one stage provider, cairn-operator-dataflow, and it
+# ships only the conformance stages `noop` and `noop.slow` (the real kernels:
+# dedup, PII redaction, export, live in official operator packs). So this flow
+# is honest about what it is: it proves the flow-leg path end to end (engine
+# selection, the flow gate on aggregate stage risk, a leg Run in the record)
+# and transforms nothing. Swap the stage for a real kernel once one is installed.
+name: engine-check
+kind: data
+description: >
+  One `noop` stage on the builtin dataflow engine: shows a flow leg in the
+  record without touching data, and registers the checked file's content as a
+  version of the dataset the leg names (#2632).
+stages:
+  - stage: noop
+    config:
+      # Bound by the pipeline leg's `with:`; unbound keys are dropped. With both set,
+      # the control plane registers `register` at `source`'s content hash: a changed
+      # file is a new version, which is what a `dataset` watch sees.
+      register: $config.register
+      source: $config.source

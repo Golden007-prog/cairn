@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+title: cairn
+message: If you use this software, please cite it as below.
+type: software
+authors:
+  - name: cairn maintainers
+repository-code: https://github.com/cairndev-sh/cairn
+url: https://cairndev.sh
+license: Apache-2.0

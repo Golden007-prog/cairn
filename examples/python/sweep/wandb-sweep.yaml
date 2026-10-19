@@ -1,0 +1,30 @@
+# Governed hyperparameter sweep with W&B Sweeps driving cairn (#145).
+#
+# cairn does NOT implement a sweep — W&B Sweeps does the search + parallel agents
+# + comparison UI, and its agent runs `wandb_sweep_runner.py`, which invokes the
+# GOVERNED `cairn run training/finetune` per trial (cost/learning/quality gated,
+# audited, HITL-promoted). The runner logs the trial's eval_loss back to the W&B
+# run so the sweep can minimize it.
+#
+#   pip install wandb
+#   wandb sweep wandb-sweep.yaml      # → prints a SWEEP_ID
+#   wandb agent <SWEEP_ID>            # run one or more agents (parallel)
+
+program: wandb_sweep_runner.py
+method: bayes
+metric:
+  name: eval_loss
+  goal: minimize
+parameters:
+  learning_rate:
+    distribution: log_uniform_values
+    min: 0.00001
+    max: 0.0005
+  lora_r:
+    values: [8, 16, 32, 64]
+  lora_alpha:
+    values: [16, 32]
+  epochs:
+    distribution: uniform
+    min: 1.0
+    max: 3.0

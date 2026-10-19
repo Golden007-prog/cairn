@@ -1,0 +1,76 @@
+# OAuth provider catalog (an internal issue) — scopes + endpoints live HERE, in
+# a file, so deployers can tune scopes without code changes. Override the path
+# with CAIRN_OAUTH_CATALOG to ship your own.
+#
+# Each entry is a kind=oauth provider for a SaaS/work app (NOT social login).
+# `scopes` is the part that matters per provider; `refresh: true` providers must
+# include their offline scope (offline_access / access_type=offline).
+#
+# Loaded by cairn/core/oauth/catalog.py; consumed by the built-in AuthlibBroker.
+
+github:
+  description: GitHub (repos, orgs, issues)
+  authorize_url: https://github.com/login/oauth/authorize
+  token_url: https://github.com/login/oauth/access_token
+  userinfo_url: https://api.github.com/user
+  scopes: [repo, read:org]
+  refresh: false
+  pkce: false
+
+slack:
+  description: Slack (chat, channels)
+  authorize_url: https://slack.com/oauth/v2/authorize
+  token_url: https://slack.com/api/oauth.v2.access
+  scopes: [chat:write, channels:read, channels:history]
+  refresh: false
+  pkce: false
+
+google:
+  description: Google Workspace (Drive, Sheets, Calendar, Gmail)
+  authorize_url: https://accounts.google.com/o/oauth2/v2/auth
+  token_url: https://oauth2.googleapis.com/token
+  userinfo_url: https://openidconnect.googleapis.com/v1/userinfo
+  scopes: [openid, email, profile, "https://www.googleapis.com/auth/drive.file"]
+  refresh: true
+  pkce: true
+  extra_authorize_params:
+    access_type: offline
+    prompt: consent
+
+notion:
+  description: Notion (pages, databases)
+  authorize_url: https://api.notion.com/v1/oauth/authorize
+  token_url: https://api.notion.com/v1/oauth/token
+  scopes: [] # Notion grants capabilities at integration setup, not via scopes
+  refresh: false
+  pkce: false
+
+jira:
+  description: Jira / Atlassian (3LO)
+  authorize_url: https://auth.atlassian.com/authorize
+  token_url: https://auth.atlassian.com/oauth/token
+  scopes: ["read:jira-work", "write:jira-work", offline_access]
+  refresh: true
+  pkce: false
+  extra_authorize_params:
+    audience: api.atlassian.com
+    prompt: consent
+
+confluence:
+  description: Confluence / Atlassian (3LO)
+  authorize_url: https://auth.atlassian.com/authorize
+  token_url: https://auth.atlassian.com/oauth/token
+  scopes: ["read:confluence-content.all", "write:confluence-content", offline_access]
+  refresh: true
+  pkce: false
+  extra_authorize_params:
+    audience: api.atlassian.com
+    prompt: consent
+
+microsoft:
+  description: Microsoft Graph (Teams, Outlook, OneDrive)
+  authorize_url: https://login.microsoftonline.com/common/oauth2/v2.0/authorize
+  token_url: https://login.microsoftonline.com/common/oauth2/v2.0/token
+  scopes: [offline_access, User.Read]
+  refresh: true
+  pkce: true

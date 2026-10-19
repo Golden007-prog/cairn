@@ -1,0 +1,36 @@
+# High-signal rules only (engineering OS, 2026-09-11). Not an architecture checker —
+# dependency direction lives in tests/core/test_architecture_boundaries.py.
+rules:
+  - id: cairn.subprocess-shell
+    message: subprocess with shell=True — pass an argv list (docs/security.md §Subprocess)
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.$F(..., shell=True, ...)
+          - pattern: asyncio.create_subprocess_shell(...)
+          - pattern: os.system(...)
+          - pattern: os.popen(...)
+    paths: { exclude: ["tests/", "**/tests/", "scripts/"] }
+  - id: cairn.command-string-interpolation
+    message: a shell command built from an f-string / format / concatenation — command injection risk; use argv
+    severity: WARNING
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.$F(f"...", ...)
+          - pattern: subprocess.$F("..." % ..., ...)
+          - pattern: subprocess.$F("...".format(...), ...)
+          - pattern: subprocess.$F($A + $B, ...)
+    paths: { exclude: ["tests/", "**/tests/"] }
+  - id: cairn.hardcoded-secret
+    message: a credential-looking literal — load it from a connection or the environment (docs/security.md)
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: $KEY = "$VALUE"
+          - pattern: $OBJ[$KEY] = "$VALUE"
+      - metavariable-regex: { metavariable: $KEY, regex: "^(?i)(.*_)?(api[_-]?key|apikey|secret|password|passwd|token|private[_-]?key)$" }
+      - metavariable-regex: { metavariable: $VALUE, regex: "^(?!(sk-test|sk-ci|dummy|test|example|placeholder|change-?me|.*-dev-|\\$\\{|<|https?://|[A-Z][A-Z0-9_]+$)).{12,}$" }
+    paths: { exclude: ["tests/", "**/tests/", "**/test_*.py", "docs/"] }

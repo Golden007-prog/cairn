@@ -1,0 +1,120 @@
+# pipelines/train-only.yaml — ONE leg: the governed ML flow (train.qlora →
+# eval.checkpoints → package.adapter) on an already-prepared dataset, so a
+# fine-tune can be submitted as a REMOTE JOB by itself (the environment's
+# ml_engine/ml_target decide where — e.g. campaign: builtin + compute.ssh gpu).
+# Eval/measurement happen in their own runs afterwards (verifiable-finetune
+# is the full measured pipeline; this is its train leg, launchable alone).
+name: train-only
+kind: pipeline
+# campaign train leg; verifiable-finetune is the user-facing one
+visibility: internal
+description: >
+  Fine-tune (QLoRA) on a prepared dataset as a single remote ML job; package
+  the candidate adapter. No data prep, no eval — those are separate runs.
+
+inputs:
+  dataset_uri: {type: str, description: "Prepared train set (jsonl with input/output), local path or s3:// URI."}
+  base_model: {type: str, default: "Qwen/Qwen2.5-1.5B-Instruct"}
+  accept_license: {type: bool, default: false, description: "Required true when base_model is a gated catalog entry (#2027, ADR-0102 D5); ignored otherwise."}
+  output_name: {type: str, default: "cairn-candidate"}
+  max_steps: {type: int, default: 400}
+  max_eval_loss: {type: float, default: 0}
+  stub: {type: bool, default: false}
+  packing: {type: bool, default: true, description: "Pack short rows into fixed-length sequences (predictable VRAM); false for small short-row sets where one packed step would equal an epoch."}
+  tracking_project: {type: str, default: "train-only"}
+  tracking_run_name: {type: str, default: "", description: "MLflow run name (empty = output_name)."}
+  artifact_target: {type: str, default: "s3", description: "Where the adapter is persisted: s3 (CAIRN_CHECKPOINT_BUCKET/PREFIX/<run>/adapter), local, or hf."}
+  registered_model_name: {type: str, default: "", description: "MLflow Registered Model to add this adapter to as a new version (empty = none)."}
+  target_modules: {type: str, default: "", description: "Comma-separated LoRA targets, e.g. q_proj,k_proj,v_proj,o_proj (attention-only). Empty = trainer default (all attention + MLP)."}
+  init_adapter_uri: {type: str, default: "", description: "Adapter to CONTINUE training from (s3://…/adapter/), for two-stage recipes (#1463). Empty = fresh adapter."}
+  learning_rate: {type: float, default: 0.0002, description: "Optimizer lr; drop to ~5e-5 for calibration passes continuing an adapter."}
+
+  # ── the rest of TrainSpec (ADR-0102 D2, #2023) ────────────────────────────
+  # This pipeline already exposed half the contract; the other half was reachable
+  # only through `$config.*`. Every default below IS the trainer's own, so an
+  # existing launch is unchanged.
+  method: {type: str, default: "qlora", description: "PEFT method: qlora | lora."}
+  epochs: {type: float, default: 1.0, description: "Passes over the training set (ignored while max_steps > 0)."}
+  lora_r: {type: int, default: 16, description: "LoRA rank."}
+  lora_alpha: {type: int, default: 16, description: "LoRA alpha (scaling)."}
+  max_seq_len: {type: int, default: 2048, description: "Tokens per training sequence."}
+  eval_split: {type: float, default: 0.1, description: "Fraction held out for mid-training eval."}
+  seed: {type: int, default: 42, description: "Split/training seed — the reproducibility knob."}
+  eval_steps: {type: int, default: 50, description: "Evaluate every N steps (0 = epoch-end)."}
+  save_steps: {type: int, default: 50, description: "Checkpoint every N steps; a restart resumes from the last one."}
+  save_total_limit: {type: int, default: 2, description: "Keep only the N most-recent checkpoints (0 = unbounded)."}
+  validate_pipeline: {type: bool, default: false, description: "Run the whole training path on CPU with a tiny model first — zero GPU spend."}
+  gpu: {type: str, default: "T4", description: "GPU type the backend provisions (T4, A10G, A100, …)."}
+  hf_repo: {type: str, default: "", description: "HF Hub repo id for artifact_target=hf; empty = derived from output_name."}
+  report_to: {type: list, default: [mlflow], description: "Experiment trackers: mlflow and/or wandb (empty = none)."}
+  extra: {type: dict, default: {}, description: "Backend/trainer passthrough."}
+
+  # ── the FIDELITY knob (T10, #2029 = #2003; ADR-0102 D2) ──────────────────
+  # How much of the corpus this run may see. 0/0 = all of it, which is what
+  # every existing launch does; a fidelity turns the run into a PROXY run —
+  # cheap, deterministic and RECORDED (seed + row-hash digest), so two proxy
+  # runs of different configurations are comparable rather than two different
+  # experiments wearing one name (warm-start §3.5.4).
+  #
+  # Setting a fidelity does NOT by itself mark the run as a proxy on the
+  # record: that is `extra.proxy`, which `pipelines/proxy-rank.yaml` sets, and
+  # it is what keeps a run out of the series' promotion headline. The two are
+  # separate on purpose — a small smoke train is not a ranking result.
+  fidelity_rows: {type: int, default: 0, description: "Train on at most N rows (0 = the whole corpus). Wins over fidelity_fraction."}
+  fidelity_fraction: {type: float, default: 0, description: "Train on this share of the corpus, e.g. 0.01 for a 1 % proxy run (0 = all)."}
+  fidelity_seed: {type: int, default: 13, description: "Subsample seed. The SAME seed reproduces the same rows and the same row-hash digest."}
+
+governance:
+  budget: {usd: 20}
+  series: train-only
+  approvers: ml-leads
+
+steps:
+  - id: train
+    flow: finetune
+    with:
+      dataset_uri: $input.dataset_uri
+      base_model: $input.base_model
+      output_name: $input.output_name
+      max_steps: $input.max_steps
+      max_eval_loss: $input.max_eval_loss
+      stub: $input.stub
+      packing: $input.packing
+      target_modules: $input.target_modules
+      init_adapter_uri: $input.init_adapter_uri
+      learning_rate: $input.learning_rate
+      artifact_target: $input.artifact_target
+      registered_model_name: $input.registered_model_name
+      # #2023 — an $input wire, so the list arrives as a real list rather than
+      # its own repr through the `with:` str() boundary. Default is [mlflow],
+      # what the inline literal here used to hard-code.
+      report_to: $input.report_to
+      tracking_project: $input.tracking_project
+      tracking_run_name: $input.tracking_run_name
+      # #2023 — the rest of TrainSpec.
+      method: $input.method
+      epochs: $input.epochs
+      lora_r: $input.lora_r
+      lora_alpha: $input.lora_alpha
+      max_seq_len: $input.max_seq_len
+      eval_split: $input.eval_split
+      seed: $input.seed
+      eval_steps: $input.eval_steps
+      save_steps: $input.save_steps
+      save_total_limit: $input.save_total_limit
+      validate_pipeline: $input.validate_pipeline
+      gpu: $input.gpu
+      hf_repo: $input.hf_repo
+      extra: $input.extra
+      # #2029 — read by the flow's `sample.fidelity` stage, which is a no-op
+      # while these are 0.
+      fidelity_rows: $input.fidelity_rows
+      fidelity_fraction: $input.fidelity_fraction
+      fidelity_seed: $input.fidelity_seed
+      # ADR-0086 H2: a second attempt resumes from the last checkpoint.
+      retry: {max_attempts: 2, initial_s: 30}
+    consumes: {dataset_uri: Dataset}
+    produces: {adapter: Model, metrics: Report}
+
+outputs:
+  model_uri: train.adapter

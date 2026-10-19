@@ -1,0 +1,27 @@
+# Caddy for cairn-light: plain HTTP on :80 by default, or automatic HTTPS when
+# CADDY_DOMAIN names a real domain. Generated from the platform's Caddyfile (#2428).
+{$CADDY_DOMAIN} {
+	# #774 — SSE MUST NOT BE BUFFERED.
+	#
+	# The console's live-run graph reads `/runs/{id}/events` and
+	# `/runs/{id}/stream`. Caddy's reverse proxy buffers responses by default,
+	# so on the box the browser showed "Connected — waiting for events…" and
+	# nothing ever moved: the events were held in the proxy, not lost. Direct
+	# to the engine the same page streamed fine, which is what made this look
+	# like an application bug for so long — it is a proxy setting, and it
+	# likely explains the whole "live run doesn't fire" cluster in the console
+	# audit (§1.1 / §1.3 / §4).
+	#
+	# `flush_interval -1` = flush every write immediately, which is exactly
+	# what a text/event-stream needs.
+	# Both spellings: the console requests the WORKSPACE-scoped form
+	# (/workspaces/{ws}/runs/{id}/stream) and a middleware rewrites it to the
+	# flat form INSIDE the app — so Caddy only ever sees the workspace form.
+	# Matching only /runs/... would miss every real console request.
+	@sse path_regexp ^(/workspaces/[^/]+)?/runs/[^/]+/(events|stream)$
+	reverse_proxy @sse server:9090 {
+		flush_interval -1
+	}
+
+	reverse_proxy server:9090
+}

@@ -1,0 +1,96 @@
+# pipelines/dpo-train.yaml — ONE GPU leg: DPO-align an existing adapter on a
+# prepared pairs dataset (#1463 round 4), submitted as a remote ML job (the
+# environment's ml_engine/ml_target decide where — campaign: builtin + ssh gpu).
+# Measurement stays its own run (closedbook-measure), same as train-only.
+name: dpo-train
+kind: pipeline
+# 1M-campaign DPO leg (#1409)
+visibility: internal
+description: >
+  DPO alignment as a single remote ML job: continue a trained adapter on
+  preference pairs, package + register the aligned candidate. No data prep,
+  no eval — those are separate runs.
+
+inputs:
+  dataset_uri: {type: str, description: "Preference pairs jsonl (prompt/chosen/rejected), s3:// or local — the dpo-pairs export."}
+  init_adapter_uri: {type: str, description: "REQUIRED: adapter to align (s3://…/checkpoint-N/ or …/adapter/)."}
+  base_model: {type: str, default: "Qwen/Qwen2.5-1.5B-Instruct"}
+  accept_license: {type: bool, default: false, description: "Required true when base_model is a gated catalog entry (#2027, ADR-0102 D5); ignored otherwise."}
+  output_name: {type: str, default: "dpo-candidate"}
+  max_steps: {type: int, default: 150}
+  learning_rate: {type: float, default: 0.000005, description: "DPO lr — an order below SFT (5e-6 default)."}
+  beta: {type: float, default: 0.1, description: "Preference-loss strength vs the frozen reference."}
+  stub: {type: bool, default: false}
+  tracking_project: {type: str, default: "dpo-train"}
+  tracking_run_name: {type: str, default: "", description: "MLflow run name (empty = output_name)."}
+  artifact_target: {type: str, default: "s3"}
+  registered_model_name: {type: str, default: "", description: "MLflow Registered Model for the aligned adapter (empty = none)."}
+
+  # ── the rest of TrainSpec (ADR-0102 D2, #2023) ────────────────────────────
+  # Defaults are the trainer's own, so an existing DPO launch is unchanged.
+  method: {type: str, default: "qlora", description: "PEFT method: qlora | lora."}
+  epochs: {type: float, default: 1.0, description: "Passes over the pairs (ignored while max_steps > 0)."}
+  lora_r: {type: int, default: 16, description: "LoRA rank (ignored when init_adapter_uri's adapter_config wins)."}
+  lora_alpha: {type: int, default: 16, description: "LoRA alpha (scaling)."}
+  target_modules: {type: str, default: "", description: "Comma-separated LoRA targets. Empty = the trainer's default."}
+  max_seq_len: {type: int, default: 2048, description: "Tokens per training sequence."}
+  eval_split: {type: float, default: 0.1, description: "Fraction of pairs held out for mid-training eval."}
+  seed: {type: int, default: 42, description: "Split/training seed — the reproducibility knob."}
+  eval_steps: {type: int, default: 50, description: "Evaluate every N steps (0 = epoch-end)."}
+  save_steps: {type: int, default: 50, description: "Checkpoint every N steps; a restart resumes from the last one."}
+  save_total_limit: {type: int, default: 2, description: "Keep only the N most-recent checkpoints (0 = unbounded)."}
+  packing: {type: bool, default: true, description: "Pack short rows into fixed-length sequences (predictable VRAM)."}
+  validate_pipeline: {type: bool, default: false, description: "Run the whole path on CPU with a tiny model first — zero GPU spend."}
+  gpu: {type: str, default: "T4", description: "GPU type the backend provisions (T4, A10G, A100, …)."}
+  hf_repo: {type: str, default: "", description: "HF Hub repo id for artifact_target=hf; empty = derived from output_name."}
+  report_to: {type: list, default: [mlflow], description: "Experiment trackers: mlflow and/or wandb (empty = none)."}
+  extra: {type: dict, default: {}, description: "Backend/trainer passthrough."}
+
+governance:
+  budget: {usd: 20}
+  series: dpo-train
+  approvers: ml-leads
+
+steps:
+  - id: train
+    flow: dpo-align
+    with:
+      dataset_uri: $input.dataset_uri
+      init_adapter_uri: $input.init_adapter_uri
+      base_model: $input.base_model
+      output_name: $input.output_name
+      max_steps: $input.max_steps
+      learning_rate: $input.learning_rate
+      beta: $input.beta
+      stub: $input.stub
+      # #2023 — an $input wire (default [mlflow]) rather than an inline literal,
+      # which would reach the kernel as its own repr through the str() boundary.
+      report_to: $input.report_to
+      tracking_project: $input.tracking_project
+      tracking_run_name: $input.tracking_run_name
+      artifact_target: $input.artifact_target
+      registered_model_name: $input.registered_model_name
+      # #2023 — the rest of TrainSpec.
+      method: $input.method
+      epochs: $input.epochs
+      lora_r: $input.lora_r
+      lora_alpha: $input.lora_alpha
+      target_modules: $input.target_modules
+      max_seq_len: $input.max_seq_len
+      eval_split: $input.eval_split
+      seed: $input.seed
+      eval_steps: $input.eval_steps
+      save_steps: $input.save_steps
+      save_total_limit: $input.save_total_limit
+      packing: $input.packing
+      validate_pipeline: $input.validate_pipeline
+      gpu: $input.gpu
+      hf_repo: $input.hf_repo
+      extra: $input.extra
+      # ADR-0086 H2: a second attempt resumes from the last checkpoint.
+      retry: {max_attempts: 2, initial_s: 30}
+    consumes: {dataset_uri: Dataset}
+    produces: {adapter: Model, metrics: Report}
+
+outputs:
+  model_uri: train.adapter

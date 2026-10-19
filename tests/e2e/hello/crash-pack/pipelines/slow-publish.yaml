@@ -1,0 +1,76 @@
+# pipelines/slow-publish.yaml — profile-and-publish with a slow flow leg (test_crash.py).
+#
+#   profile → data gate → slow (flow, ~12 s) → stage → person gate ⏸ → publish
+#
+# Same legs and gates as the example pipeline, so the crash cells assert the same
+# records; the flow leg is the one that can be mid-way when the server dies.
+name: slow-publish
+kind: pipeline
+visibility: public
+description: The example pipeline with a slow flow leg, for the crash cells.
+outcome: A pipeline a crash can interrupt mid-leg and at a gate
+suite: data
+
+inputs:
+  path: {type: str, default: "examples/hello-cairn/data/sample.jsonl", description: "JSONL file to profile."}
+  min_rows: {type: int, default: 10, description: "The data gate's row floor."}
+  expectation:
+    type: dict
+    description: "The roles data/profile resolves."
+    default:
+      kind: rows
+      roles:
+        - {name: text, required: true, aliases: [body, content]}
+        - {name: label, required: true, aliases: [category]}
+
+governance:
+  budget: {usd: 1}
+  series: hello-crash
+  approvers: data-owners
+
+steps:
+  - id: profile
+    label: Profile the dataset
+    task: data/profile
+    with:
+      source: $input.path
+      expectation: $input.expectation
+
+  - gate: data-ok
+    depends_on: [profile]
+    predicate: steps.profile.verdict == 'pass' && steps.profile.record_count >= input.min_rows
+
+  - id: slow
+    label: The slow flow leg
+    flow: slow
+    depends_on: [data-ok]
+
+  - id: stage
+    label: Stage the profile summary
+    task: storage/put
+    depends_on: [slow]
+    with:
+      store: crash-staging
+      key: summary
+      content: $steps.profile.note
+      content_type: text/plain
+
+  - gate: review
+    depends_on: [stage]
+    approvers: data-owners
+    show:
+      - profile.verdict
+      - stage.uri
+
+  - id: publish
+    label: Publish the approved summary
+    task: storage/put
+    depends_on: [review]
+    with:
+      store: crash-published
+      key: summary
+      content: $steps.profile.note
+      content_type: text/plain
+
+outputs:
+  published: publish.uri

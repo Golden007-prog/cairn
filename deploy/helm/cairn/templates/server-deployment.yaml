@@ -1,0 +1,138 @@
+{{/*
+The control plane: HTTP + SSE + the in-process scheduler (cron), and — under
+runtime=dbos — the durable orchestrator itself. Serves the console SPA from
+console/dist inside the image, so there is no second service or Deployment for
+the UI (the image must be built with the console; engine-image.yml does that).
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cairn.fullname" . }}-server
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  replicas: {{ .Values.server.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "cairn.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  strategy:
+    # ~/.cairn is a ReadWriteOnce PVC — two pods cannot mount it at once, so a
+    # rolling update would deadlock on the volume. Recreate is deliberate.
+    type: {{ if .Values.server.persistence.enabled }}Recreate{{ else }}RollingUpdate{{ end }}
+  template:
+    metadata:
+      labels:
+        {{- include "cairn.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: server
+      annotations:
+        # Roll the pods when the env changes — otherwise a `helm upgrade` that
+        # only touches values leaves the old env running.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.server.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "cairn.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: server
+          image: {{ include "cairn.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["cairn-server"]
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.port }}
+          envFrom:
+            {{- include "cairn.envFrom" . | nindent 12 }}
+          # /healthz is in the app's unauthenticated set (auth._OPEN_PATHS), so
+          # the probes need no credential — the same route compose's healthcheck
+          # uses (#1516). start-up loads packs, operators and the runtime, so the
+          # startupProbe carries the long grace and the others stay tight.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.server.port }}
+            periodSeconds: 10
+            failureThreshold: 18      # up to 180s, matching compose's start_period
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.server.port }}
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.server.port }}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          {{- if .Values.server.persistence.enabled }}
+          volumeMounts:
+            - name: cairn-data
+              mountPath: /root/.cairn
+            # #2073 — SkyPilot's state, on the SAME claim under a subPath.
+            # `~/.sky` holds its SQLite cluster state, plus the SSH node pool
+            # and the key cairn's adapter materialises. Lose it and `sky down`
+            # can no longer find a cluster this control plane launched: the
+            # machine keeps billing with nothing able to stop it. A provisioning
+            # engine's memory has to outlive the pod.
+            - name: cairn-data
+              mountPath: /root/.sky
+              subPath: sky
+          {{- end }}
+      {{- if .Values.server.persistence.enabled }}
+      volumes:
+        - name: cairn-data
+          persistentVolumeClaim:
+            claimName: {{ include "cairn.fullname" . }}-data
+      {{- end }}
+      {{- with .Values.server.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+{{- if .Values.server.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "cairn.fullname" . }}-data
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+  annotations:
+    # Survive `helm uninstall`: these stores hold policies, triggers, schedules
+    # and connections that no CAIRN_STORAGE migration has claimed yet.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.server.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.server.persistence.size }}
+{{- end }}
