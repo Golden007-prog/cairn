@@ -21,7 +21,7 @@ obtain a scoped decision rather than introducing another pattern. Do not impleme
 fixture syntax as production grammar without its own schema/compatibility review.
 
 These are review obligations, not a claim that CI already enforces the new contracts.
-The [issue workflow](17-issue-workflow.md) governs approval and evidence. Technical
+The issue workflow governs approval and evidence. Technical
 enforcement must arrive through the tracked rejecting tests and CI closure gate.
 
 ## Ownership and dependency direction

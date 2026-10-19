@@ -49,7 +49,6 @@ members = [
     "cairn-operator-secrets-infisical",
     "cairn-operator-train-local",
     "cairn-pack-hello",
-    "cairn-sdk",
     "cairndev",
 ]
 
@@ -1017,21 +1016,6 @@ requires-dist = [
 provides-extras = ["all"]
 
 [[package]]
-name = "cairn-sdk"
-version = "0.1.0"
-source = { editable = "packages/cairn-sdk" }
-dependencies = [
-    { name = "cairn-client" },
-    { name = "pyyaml" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "cairn-client", editable = "packages/cairn-client" },
-    { name = "pyyaml", specifier = ">=6" },
-]
-
-[[package]]
 name = "cairndev"
 version = "0.1.0"
 source = { editable = "." }
@@ -1066,7 +1050,6 @@ dependencies = [
     { name = "cairn-operator-secrets-env" },
     { name = "cairn-operator-secrets-infisical" },
     { name = "cairn-operator-train-local" },
-    { name = "cairn-sdk" },
     { name = "fastapi", extra = ["standard"] },
     { name = "fastmcp" },
     { name = "httpx" },
@@ -1231,7 +1214,6 @@ requires-dist = [
     { name = "cairn-operator-train-local", editable = "packages/cairn-operator-train-local" },
     { name = "cairn-operator-train-local", extras = ["train"], marker = "extra == 'train'", editable = "packages/cairn-operator-train-local" },
     { name = "cairn-pack-hello", extras = ["all"], marker = "extra == 'hello'", directory = "examples/hello-cairn" },
-    { name = "cairn-sdk", editable = "packages/cairn-sdk" },
     { name = "dbos", marker = "extra == 'runtime-dbos'", specifier = ">=2.0" },
     { name = "deepeval", marker = "extra == 'dev'", specifier = ">=1.5.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.0" },

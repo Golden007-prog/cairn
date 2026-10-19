@@ -28,7 +28,6 @@ dependencies = [
     # the authoring projection (#1253, ADR-0087 P1) — compiles classes to
     # records; imports NOTHING from cairn.core (the golden tests in tests/core
     # hold compiler and loader together).
-    "cairn-sdk",
     "fastapi[standard]>=0.115.0",
     "langgraph>=0.4.0",
     "langchain-core>=0.3.0",
@@ -349,7 +348,6 @@ skypilot = ["cairn-operator-dataflow-skypilot", "skypilot[aws,kubernetes,runpod,
 [tool.uv.workspace]
 members = [
     "packages/cairn-client",
-    "packages/cairn-sdk",
     "packages/cairn-operator-mcp",
     "packages/cairn-operator-memory-local",
     "packages/cairn-operator-artifact-local",
@@ -384,7 +382,6 @@ members = [
 
 [tool.uv.sources]
 cairn-client           = { workspace = true }
-cairn-sdk              = { workspace = true }
 cairn-operator-data-profile  = { workspace = true }
 cairn-contracts-dataflow = { workspace = true, editable = false }
 cairn-contracts-audit  = { workspace = true, editable = false }

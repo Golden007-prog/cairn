@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 #: Distribution-name prefixes this repository's private set uses.
 PRIVATE_PREFIXES = ("cairn-operator-", "cairn-contracts-", "cairn-pack-")
 #: Distributions that are extras, never part of the base install.
-PRIVATE_NAMES = {"cairn-ask", "asyncssh", "cairn-platform"}
+PRIVATE_NAMES = {"cairn-ask", "cairn-sdk", "asyncssh", "cairn-platform"}
 #: What a selected extra may admit: an optional operator pack, nothing else (ADR-0134 D1).
 EXTRA_ADMITS = "cairn-operator-"
 

@@ -109,7 +109,6 @@ export default defineConfig({
           items: [
             { label: 'CLI', slug: 'reference/cli' },
             { label: 'Builtin operators', slug: 'reference/operators' },
-            { label: 'Python SDK', slug: 'sdk' },
           ],
         },
       ],

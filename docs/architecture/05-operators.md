@@ -108,4 +108,4 @@ runs it), never by the control plane directly.
 | Every operator invocation passes `enforce_gate` | CONFIRMED for compiler nodes and task legs (`runtime.py:950`, `pipeline_bridge.py:1332`); stages inside a flow are governed at admission by aggregated stage risk, not per stage (ADR-0089 R2, `tests/core/test_inflow_policy_boundary.py`) |
 | Manifest ↔ class in sync | CONFIRMED when installed; **vacuous** when not (`cairn/operators/CLAUDE.md` §B) |
 | Operator packs own their impl; no cross-pack imports | PARTIALLY: `operator_dataflow → operator_remote` (lazy) |
-| `guard_context` protects lifted SDK ops | reachable only from SDK-generated code (`packages/cairn-sdk/src/cairn_sdk/compiler.py:474`); hand-written operators build unguarded contexts (DOCUMENTED in `docs/audits/chokepoint-reachability-2026-08-13.md`, still true) |
+| `guard_context` protects lifted SDK ops | reachable only from SDK-generated code (`sdk/src/cairn_sdk/compiler.py:474`); hand-written operators build unguarded contexts (DOCUMENTED in `docs/audits/chokepoint-reachability-2026-08-13.md`, still true) |

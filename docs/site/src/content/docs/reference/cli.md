@@ -44,7 +44,6 @@ CAIRN_PROFILE=examples/hello-cairn/profiles/hello.toml cairn validate examples/h
 | `pack schema <ref>` | the UI contract for a template: inputs, outputs, plan, steps |
 | `pack check` | fail on manifest ↔ code drift in operator packs |
 | `pack add` | make a scaffolded pack discoverable by the engine (wires it into the workspace's `pyproject.toml`) |
-| `pack build <file>:<Class>` | compile a `cairn-sdk` pipeline class into pack records (see [Python SDK](/sdk/)) |
 | `pack sync [dir]` | regenerate an operator pack's `pack.toml` tables and entry points from its classes; `--check` reports drift |
 
 ### `config workflow <template-ref>`

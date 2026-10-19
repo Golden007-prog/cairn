@@ -18,7 +18,7 @@ The aim is explicit, independently checked evidence and bounded support claims.
 
 Current policy already requires layered testing, real handoffs, independent review and
 PASS/FAIL/UNKNOWN qualification. See [testing strategy](../testing/strategy.md),
-[issue workflow](../architecture/17-issue-workflow.md) and
+issue workflow and
 [verification skill](../../.agents/skills/verify/SKILL.md).
 Existing code includes `cairn/core/dataflow/conformance.py`, manifest agreement tests,
 architecture boundary tests and profile/trigger/recovery suites. The gap is consistent

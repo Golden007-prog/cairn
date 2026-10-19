@@ -35,7 +35,6 @@ inside ADR bodies resolve to `ADR-00NN.md`.
 | ADR-0018 | §24.18 | decided | Bounded dynamic-plan yes; open dynamic-graph no |
 | ADR-0019 | §24.19 | decided | Pack code architecture — operator packs vs domain packs |
 | ADR-0020 | §24.20 | locked | Pack contract — LOCKED schema, concepts, bindings, CLI surface |
-| ADR-0021 | §24.21 | decided | Demo 2 — pack restructure showcase |
 | ADR-0022 | §24.22 | decided | Compiler AST strategy — LangGraph-shaped AST + JSON snapshots; no generic IR |
 | ADR-0023 | §24.23 | decided | RAG indexing lifecycle — idempotency-first, durability deferred |
 | ADR-0024 | §24.24 | decided | Drop Restate from core — interrupt() HITL, Temporal for long-running |
@@ -53,8 +52,6 @@ inside ADR bodies resolve to `ADR-00NN.md`.
 | ADR-0036 | — | decided | Runtime layering — Temporal runs the durable governed graph; DBOS is a batch-executor tier, not a graph-wrapping runtime. Amends ADR-0035 |
 | ADR-0037 | — | decided | Outbound OAuth via a replaceable broker seam — `OAuthBroker` Protocol + Nango sidecar as impl #1 (auth-only, token comes home), not Composio (server-side execution) |
 | ADR-0038 | — | decided | Long-running job control loop — operator-runner + bidirectional channel (events up / control down); govern selected in-loop gates, not just the edges. Extends ADR-0036 + ADR-0034 |
-| ADR-0039 | — | decided | Governed train→eval→promote spine — cost + quality gates, provenance, experiment sweep |
-| ADR-0040 | — | decided | Eval-delta gate + the produce/decide/enforce split (unlocking compression) |
 | ADR-0041 | — | decided | cairn SDK — a Python client to the governed runtime (no workflow-authoring DSL) |
 | ADR-0042 | — | decided | Operator granularity & where integration breadth lives |
 | ADR-0043 | — | decided | Remote compute over SSH (`remote/exec`) + the NATS remote-worker channel |
@@ -70,15 +67,12 @@ inside ADR bodies resolve to `ADR-00NN.md`.
 | ADR-0053 | — | decided | Policy scoping: the environment is the wiring hub |
 | ADR-0054 | — | proposed | Account is the tenant entity; connectors are account-scoped |
 | ADR-0055 | — | proposed | Registry + real server-side install (lifecycle + install-record) |
-| ADR-0056 | — | proposed | Licensing & open-source strategy |
 | ADR-0057 | — | proposed | Packs ship runnable + evaluatable payloads (tiered demo/sample data, golden data, seed config, result evaluation) |
 | ADR-0058 | — | proposed | Storage unification: one `OBS_STORAGE` selector + a lazy `build_storage()` resolver |
 | ADR-0059 | — | proposed | Closed-loop telemetry storage: Postgres ledger + OTLP/OpenInference fan-out + console verdict UI |
 | ADR-0060 | — | proposed | The evaluation engine: auto-eval on completion, workflow-scoped failure diagnosis, and gated suggestion routing |
 | ADR-0061 | — | proposed | Knowledge as a governed, cross-pack-composed context slot |
 | ADR-0062 | — | proposed | BYO (drop-in) knowledge corpora via account-scoped artifact storage |
-| ADR-0063 | — | proposed | Model serving: cairn deploys + governs an endpoint, it does not host the server |
-| ADR-0064 | — | proposed | Training-checkpoint durability: the remote job makes the trainer's checkpoints survive the box and relaunches onto them |
 | ADR-0065 | — | proposed | Typed interrupt kind: a remote-job pause is not an approval gate |
 | ADR-0066 | — | proposed | Bundles carry the cross-pack data contract; packs are standalone typed steps |
 | ADR-0067 | — | decided | One governed operations layer; expose it over HTTP + MCP; CLI/ask/console/agents are clients |
@@ -91,9 +85,7 @@ inside ADR bodies resolve to `ADR-00NN.md`.
 | ADR-0074 | — | proposed | Input data validation: a generic `data/profile` pre-flight (roles, not formats) |
 | ADR-0075 | — | proposed | The run **outcome channel**: fact-vs-presentation boundary for the pilot / result surface |
 | ADR-0076 | — | proposed | Loop-aware core: govern the loop, not just the run |
-| ADR-0077 | — | proposed | Governed LLM red-teaming: adversarial safety as a governed workflow |
 | ADR-0078 | — | proposed | Columnar data plane: Arrow in memory, Parquet at rest |
-| ADR-0079 | — | proposed | Governed tiered PII cascade: one Presidio pipeline, regex as a tier |
 | ADR-0080 | — | proposed | Dataset data-plane separation: batch jobs, fused checks, indexed fingerprints |
 | ADR-0081 | — | proposed (amended by ADR-0134) | The dataflow extension: an engine-agnostic data plane behind operators, backends, and pack dataflows |
 | ADR-0082 | — | decided | Training subflow engines: Metaflow (and siblings) behind the train door |
@@ -101,27 +93,21 @@ inside ADR bodies resolve to `ADR-00NN.md`.
 | ADR-0084 | — | decided | cairn is a control plane — one flow concept (3 kinds), mandatory pack pipelines, runtimes as adapters |
 | ADR-0085 | — | proposed | Team-scale DX — console seam via OpenAPI contract, top-level `console/`, one-command sqlite dev env |
 | ADR-0086 | — | proposed | Run-lifecycle hardening — self-sufficient durable execution without an external orchestrator |
-| ADR-0087 | — | decided | cairn SDK — a compiler frontend over records, never a runtime |
+| ADR-0087 | — | decided (amended by ADR-0135) | cairn SDK — a compiler frontend over records, never a runtime |
 | ADR-0088 | — | decided | Durable stage handoff — cross-box resume for flow legs (H6) |
 | ADR-0089 | — | decided | Metaflow as governed compute substrate, not the execution DAG |
 | ADR-0090 | — | proposed | Stage-level fan-out: `map:` on a stage (G4) |
 | ADR-0091 | — | proposed | Horizontal scale for the governed control plane |
 | ADR-0092 | — | proposed | Pack authoring & wiring ergonomics: one source of truth, author-time contracts |
-| ADR-0093 | — | proposed | Console new-user journey: playground-first, five blessed workflows, promote-to-pipeline |
 | ADR-0094 | — | proposed | Account tenancy and self-serve signup: bind the workspace, then open the door |
-| ADR-0095 | — | proposed | Continual learning loop: GRPO/RL rung, replay, signal capture, champion/challenger serving |
-| ADR-0096 | — | decided | Console pipeline builder: a record-first projection |
 | ADR-0097 | — | decided | Compute lifecycle as governed legs: `finalizer:` and the acquire/release pair |
-| ADR-0098 | — | decided | Serving as a pipeline leg: endpoint as a leg output, stop as a finalizer |
 | ADR-0099 | — | proposed | A pipeline declares the services it needs; the launch door enforces it |
-| ADR-0100 | — | proposed | Workflow suites — the curated agentic-leg catalog for cairn-light |
 | ADR-0101 | — | decided | One start model: triggers on the workflow, inputs-only runs, one launch call, MCP legs |
 | ADR-0102 | — | decided | The training experience start to end: dataset roles and intake verdict, three configuration tiers, live metrics over the |
 | ADR-0103 | — | decided | The operator reporting contract: every operator declares what it reports, the base records what it ran with |
 | ADR-0104 | — | decided (amended by ADR-0134) | Remote deployment is part of cairn: images, a pull worker, a chart, a provisioning engine |
 | ADR-0105 | — | decided | Everything you start is a pipeline: one record, one door, one console noun |
 | ADR-0106 | — | decided | Only declared pipelines run; a flow is a component |
-| ADR-0107 | — | proposed | Outcome-first console — from a capability surface to a guided one |
 | [ADR-0108](ADR-0108-capability-contract-conformance.md) | — | proposed | Capability contract conformance through existing pack and pipeline boundaries |
 | [ADR-0109](ADR-0109-governed-evaluation-optimization-and-decisions.md) | — | proposed | Governed evaluation, candidate optimization and typed decisions — DSPy, Jev, Ragas and standalone GEPA |
 | [ADR-0110](ADR-0110-native-workflow-export.md) | — | proposed | Native workflow applications selected by domain pack and profile — independent execution without Cairn Core or a mandatory Cairn runtime |
@@ -134,11 +120,11 @@ inside ADR bodies resolve to `ADR-00NN.md`.
 | [ADR-0117](ADR-0117-conformance-refusals-fail-template-nodes.md) | #2241 | accepted | A shared-contract refusal fails a template operation node (scoped amendment of the #568 degrade-to-finding policy under ADR-0084 D8) |
 | [ADR-0118](ADR-0118-shared-contracts-at-the-stage-boundary.md) | #2298 | accepted | Shared contracts at the dataflow stage boundary: stage `implements`, stage invocation entries, contracts carried in `DataflowSpec.contracts` and `StageRef.contract`, checks at the control plane and in the interpreter (amends ADR-0111) |
 | [ADR-0119](ADR-0119-oauth-identity-is-not-a-door.md) | #2336 | accepted-pending-owner | An OAuth identity is not a sign-up door: Google/GitHub sign-in behind `OBS_SIGNUP`, link only on a verified matching email, session handed over in a URL fragment (amends ADR-0094) |
-| [ADR-0120](ADR-0120-open-source-boundary-and-extension-points.md) | #2400 | accepted (amended by ADR-0123, ADR-0134) | The open-source boundary: public core vs platform, the extension-point groups the core reaches the platform through, the boundary tests |
-| [ADR-0121](ADR-0121-repositories-layout-and-distribution-names.md) | #2401 | accepted (amended by ADR-0123) | Two repositories (public `cairndev-sh/cairn` with fresh history, private platform with history), the src layout, `cairndev` / `cairn-operator-*` / `cairn-pack-*`, CircleCI validation, Actions publishing |
+| [ADR-0120](ADR-0120-open-source-boundary-and-extension-points.md) | #2400 | accepted (amended by ADR-0123, ADR-0134, ADR-0135) | The open-source boundary: public core vs platform, the extension-point groups the core reaches the platform through, the boundary tests |
+| [ADR-0121](ADR-0121-repositories-layout-and-distribution-names.md) | #2401 | accepted (amended by ADR-0123, ADR-0135) | Two repositories (public `cairndev-sh/cairn` with fresh history, private platform with history), the src layout, `cairndev` / `cairn-operator-*` / `cairn-pack-*`, CircleCI validation, Actions publishing |
 | [ADR-0122](ADR-0122-cairn-environment-prefix.md) | #2402 | accepted (amended by ADR-0123) | The `CAIRN_*` environment prefix with `OBS_*` read until 1.0 through one resolver |
 | [ADR-0123](ADR-0123-open-source-phase-1-and-2-amendments.md) | #2399 | accepted (amended by ADR-0124, ADR-0133) | What Phase 1 and Phase 2 of the open-source release changed in ADR-0120–0122: D2's router list, the five groups and seven run-hook events, the operator re-exports, what stays in core, the platform in the monorepo, twelve builtins, the fallbacks that outlive the rename |
-| [ADR-0124](ADR-0124-open-source-phase-2-closures.md) | #2399 | accepted (amended by ADR-0133) | Phase 2 closures: the #2497 inventory decided (actions and observability to the platform, the rest core by decision), public images at ghcr.io/cairndev-sh, process material and the training architecture private, the landing README with a generated Quickstart, the prod tooling scrubbed by the assembler |
+| [ADR-0124](ADR-0124-open-source-phase-2-closures.md) | #2399 | accepted (amended by ADR-0133, ADR-0135) | Phase 2 closures: the #2497 inventory decided (actions and observability to the platform, the rest core by decision), public images at ghcr.io/cairndev-sh, process material and the training architecture private, the landing README with a generated Quickstart, the prod tooling scrubbed by the assembler |
 | [ADR-0125](ADR-0125-in-process-leg-liveness.md) | #2555 | accepted (D1 amended by ADR-0126) | An in-process leg names its owner process (`Run.owner`); each process holds an owner lock (Postgres session lock, SQLite file lock), and one liveness function (ALIVE/UNDETERMINED/DEAD/LEGACY) drives restart, cancel and the reconciler (D1–D4, built); scheduled/on-event steps write a fire key ahead of submit (`StepState.fired_key`, D5 — not yet built); a one-off script settles pre-#2554 leftovers (D6, built) |
 | [ADR-0126](ADR-0126-owner-rewrite-on-takeover.md) | #2555 | accepted (amends ADR-0125 D1) | `Run.owner` is rewritten when a process takes over running a leg (re-attach, queued re-arm, read_only re-fire, approved-run resume), never when it merely claims or re-maps it |
 | [ADR-0127](ADR-0127-public-example-is-the-feature-proof.md) | #2572, #2430 | accepted (amended by ADR-0134) | The public example (four pipelines) is the feature proof and the flip's gate; a domain pack may ship glue (hook listener, MCP server script); `secrets-infisical` and a new `train-local` pack join the builtins (14) with contract `train.finetune`; core ships only the connectors the example proves (engine adapters → cairn-extensions); DBOS is the public durable runtime, Temporal task legs (#1378) and a NATS bus (#969) stay outside the gate; Ask and lineage records stay platform-only. Errata 2026-10-15: the engine-adapter move is deferred (#2583, then #2535) |
@@ -149,3 +135,4 @@ inside ADR bodies resolve to `ADR-00NN.md`.
 | [ADR-0132](ADR-0132-development-moves-to-the-public-upstream.md) | #2637, #2430 | accepted 2026-10-16 (amends ADR-0121 D7; builds on ADR-0121 D1/D2, ADR-0128) | Development moves to the public upstream at the flip: `cairndev-sh/cairn` is where the core is developed (a real repository with its own GitHub Actions CI, contributor-ready), the platform is a downstream pinned to released core wheels with a core-`main` early-warning job, the monorepo freezes read-only, one folder + one editable venv for maintainers, lockstep patch releases, issues where the code lives, process files in `cairn-dev`; a synced mirror (Copybara/josh) is rejected |
 | [ADR-0133](ADR-0133-private-issue-links-become-plain-text.md) | #2430 | accepted 2026-10-16 (amends ADR-0123 D6, ADR-0124 D2 and D5) | Private issue and PR links (`evs-cmd/<repo>#N` and the `evs-cmd` organisation's issue/PR URLs) become plain text in the public tree and the leak scan flags any left; image names and the registry keep `evs-cmd` (the images are published there) |
 | [ADR-0134](ADR-0134-public-wheel-set-and-optional-engine-wheels.md) | #2678 | accepted 2026-10-16 (amends ADR-0127 D5, ADR-0128 D2 and owner decisions 2/4, ADR-0081 §3, ADR-0104 D5, ADR-0120 D1's profile list, ADR-0127 D7) | The public wheel set before the first PyPI release: Metaflow and SkyPilot become optional wheels in the public repository (`cairndev[metaflow]`, `cairndev[skypilot]`), Prefect is removed, the SkyPilot launch check becomes an engine-neutral door fed by an optional `check_ready()`, platform-only profiles and Ask's engine wiring leave `cairndev` |
+| [ADR-0135](ADR-0135-public-core-ships-no-sdk-and-no-circleci.md) | #2430 | accepted 2026-10-19 (amends ADR-0120 D1, ADR-0121 D1/D3, ADR-0087; narrows ADR-0121 D4, ADR-0124 D5; implements ADR-0132 for the assembled tree) | The public core ships no authoring SDK (`cairn-sdk` and `cairn pack build` are the platform's); the public tree carries no CircleCI configuration and no record or doc whose subject is only the platform's (14 ADRs, 10 docs stay with the monorepo and the platform) |

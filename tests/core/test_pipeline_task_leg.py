@@ -223,6 +223,7 @@ async def test_sdk_lifted_def_runs_as_a_task_leg(tmp_path):
     import importlib.util
 
     from cairn.core.engine.pipeline import load_pipeline_def
+    pytest.importorskip("cairn_sdk", reason="the authoring SDK is the platform's (ADR-0135)")
     from cairn_sdk import compile_pipeline, pipeline, step, gate
 
     @pipeline(series="live", pack="t1278-live")

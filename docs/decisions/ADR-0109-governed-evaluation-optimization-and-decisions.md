@@ -4,7 +4,7 @@
 - **Date:** 2026-09-22
 - **Scope:** DSPy, Jev (TypeSafe AI), Ragas and standalone GEPA across agentic, data and ML workflows.
 - **Evidence:** local HEAD `3a69f32fa7fee82cc75662776bbe6627b16d90a8` plus the inspected working tree; official upstream documentation accessed 2026-09-22. No remote-main parity or live benchmark claim.
-- **Authority:** preserves ADR-0012, ADR-0020, ADR-0026, ADR-0028, ADR-0031, ADR-0034, ADR-0084, ADR-0103 and ADR-0106, and the [frozen training baseline](../architecture/training/FREEZE-v1.md). Supersedes no accepted ADR. ADR-0108 remains a separate proposal, not a prerequisite assumed to be implemented.
+- **Authority:** preserves ADR-0012, ADR-0020, ADR-0026, ADR-0028, ADR-0031, ADR-0034, ADR-0084, ADR-0103 and ADR-0106, and the frozen training baseline. Supersedes no accepted ADR. ADR-0108 remains a separate proposal, not a prerequisite assumed to be implemented.
 
 ## Context
 

@@ -197,9 +197,9 @@ everything above is the way it is.
 ## The public core and the platform
 
 `uv sync --extra dev` alone installs the PUBLIC SET (the engine, the builtin operator
-packs, the core contracts, client, sdk) and nothing private; CircleCI's `public` job
+packs, the core contracts, client) and nothing private; the `public` CI job
 proves that set installs alone and passes the `tests/core` files listed in
-`.circleci/public_core_tests.txt` (plus `scripts/check_public_set.py`, which refuses
+`tests/core` (exactly the public set, as assembled) (plus `scripts/check_public_set.py`, which refuses
 any private distribution). The `ssh` extra adds the rest, which
 is what this repository's CI and image run. Three rules the boundary tests enforce:
 the public core never imports `cairn_platform` or a domain pack; an operator pack

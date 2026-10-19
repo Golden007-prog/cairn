@@ -21,8 +21,11 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from cairn.core.eligibility import workflow_eligibility
+from cairn.core import workflow_registry
 from cairn.core.operator import loader
+from cairn.core.pack.loader import DEV_PACK_PATH_ENV
 from cairn.core.triggers.server import build_app
+from tests import _layout
 
 URL = "/registry/installed-workflows"
 SLOW_S = 1.5
@@ -37,8 +40,14 @@ class _Runner:
 
 
 @pytest.fixture()
-def app(monkeypatch):
+def app(monkeypatch, tmp_path):
+    """Hermetic: its own store, and the example pack as the discoverable workflows — the
+    listing's first read syncs from discovery, and on a fresh machine (the public CI runner)
+    nothing else is discoverable; on a developer machine ~/.cairn would answer instead."""
     monkeypatch.delenv("OBS_JWT_SECRET", raising=False)  # keyless
+    monkeypatch.setenv("CAIRN_STORAGE", f"sqlite:///{tmp_path / 'listing.db'}")
+    monkeypatch.setattr(workflow_registry, "_store", None)   # the process-wide registry is rebuilt from THIS env
+    monkeypatch.setenv(DEV_PACK_PATH_ENV, str(_layout.REPO / "examples" / "hello-cairn"))
     return build_app(_Runner(), enable_scheduler=False)
 
 

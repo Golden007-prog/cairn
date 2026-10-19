@@ -34,8 +34,7 @@ different backends by changing the profile. See
   operators implement (`contract://storage.put/1.0.0` and so on).
 - **The example pack** (`cairn-pack-hello`): a domain pack is data plus a
   little glue (a run hook, a stdio MCP server), never operators.
-- **Clients**: `cairn-client` (the HTTP API) and `cairn-sdk` (authoring
-  pipelines in Python).
+- **Client**: `cairn-client`, a typed Python client for the HTTP API.
 
 ## The path a launch takes
 

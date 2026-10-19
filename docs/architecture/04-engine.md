@@ -91,5 +91,5 @@ files), `test_flatten_finetune.py`, `test_wire_finetune_remote_compile.py`,
 - `agent_loop` retired — CONFIRMED: `compiler.py:163` raises on `flow.type: agent_loop`. The compiler docstring still says "three flow types" and lists two.
 - LangGraph is confined to agentic legs — CONFIRMED (`test_leg_executor.py`).
 
-## Known hotspots (see [15-architecture-risks.md](15-architecture-risks.md))
+## Known hotspots (see 15-architecture-risks.md)
 `_compile_bt` (703 lines), `compiler.py` (1947).

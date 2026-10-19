@@ -9,7 +9,7 @@ neither proposal silently changes the frozen baseline. Resolve the carrier decis
 
 **DOCUMENTED / PROPOSED — not CURRENT and not an accepted TARGET.** Decision authority:
 [ADR-0108](../decisions/ADR-0108-capability-contract-conformance.md), status PROPOSED.
-The existing [frozen baseline](training/FREEZE-v1.md) is unchanged. This page explains
+The existing frozen baseline is unchanged. This page explains
 the proposal; it does not adopt it. Evidence snapshot: `3a69f32f`, 2026-09-20.
 
 ## Execution shape preserved

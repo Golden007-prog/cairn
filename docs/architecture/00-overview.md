@@ -34,9 +34,10 @@ Concretely it is:
   ADR-0127 D3, `train_local` joined
   with ADR-0127 D4, OBSERVED);
   113 operator entry points, all discoverable in a normal install (full inventory:
-  [16-capability-catalog.md](16-capability-catalog.md));
-- three satellite wheels: `client/` (`cairn-client`, typed API client), `ask/`
-  (`cairn-ask`, the NL copilot), `sdk/` (`cairn-sdk`, authoring projection);
+  16-capability-catalog.md);
+- three satellite wheels: `client/` (`cairn-client`, typed API client; public), `ask/`
+  (`cairn-ask`, the NL copilot) and `sdk/` (`cairn-sdk`, authoring projection) — the last
+  two are the platform's (ADR-0127 D7, ADR-0135);
 - a React/Vite **console** (`console/`, 209 TS files) bound to the engine through a
   committed OpenAPI contract (`console/openapi.json`, 207 paths).
 
@@ -79,7 +80,7 @@ Caveats the ladder hides (all OBSERVED):
 - The Temporal owner (`runtime/temporal/pipeline_workflow.py`) is a second implementation of
   the "Pipeline" and "Governed legs" rows, selected by `CAIRN_RUNTIME=temporal`.
 - One entry bypasses the ladder: `cairn run <pack>/<template>` compiles and runs in-process
-  (`cli/commands/run.py:332,348`) — see [15-architecture-risks.md](15-architecture-risks.md) C1.
+  (`cli/commands/run.py:332,348`) — see 15-architecture-risks.md C1.
 
 **One sentence:** *a pipeline is a DAG of legs; every leg is a governed `Run`; a leg is
 either an agentic template (LangGraph), a data/ml flow (an engine adapter behind
@@ -100,7 +101,7 @@ leg path calls.*
 | Governance | `src/cairn/core/approval/`, `policy/`, `obs/`, `budget_reservations.py`, the admission "doors" | approval gate, policy, budget, redaction, audit | [08-governance.md](08-governance.md) |
 | Storage & provenance | `src/cairn/core/storage/` + ~20 store modules at `src/cairn/core/*.py` | runs, events, artifacts, pipeline records, registries | [09-storage-and-provenance.md](09-storage-and-provenance.md) |
 | Services | `src/cairn/services/` | LLM gateway/factory, MCP, memory, RAG (core-adjacent) | [02-dependency-model.md](02-dependency-model.md) |
-| Domains | `cairn/packs/{training,dataset_readiness,serving,…}` | the runnable business units | [10](10-training.md) · [11](11-dataset.md) · [12](12-serving.md) |
+| Domains | `cairn/packs/{training,dataset_readiness,serving,…}` | the runnable business units | 10 · 11 · 12 |
 
 ## 4. How the boundaries depend on each other
 
@@ -189,14 +190,14 @@ exceptions). The dotted edge is the one documented bidirectional coupling.
    `cairn/packs/training/flows/finetune.yaml`, `cairn/operators/official/training/`.
 
 Then the golden paths: [pipeline](../golden-paths/pipeline.md) ·
-[operator](../golden-paths/operator.md) · [training](../golden-paths/training.md) ·
-[dataset](../golden-paths/dataset.md) · [serving](../golden-paths/serving.md) ·
+[operator](../golden-paths/operator.md) · training ·
+dataset · serving ·
 [hello-cairn, the public feature proof](../golden-paths/hello.md).
 
 ## 9. Relationship to existing documents
 
 - `docs/architecture.md` is the older top-down narrative (incident-era vocabulary). Parts
-  of it are stale; conflicts are listed in [15-architecture-risks.md](15-architecture-risks.md) §Conflicts.
+  of it are stale; conflicts are listed in 15-architecture-risks.md §Conflicts.
 - `docs/decisions/ADR-*.md` is the decision log (106 ADRs). `docs/adr/README.md` indexes it
   and lists **candidate** ADRs for decisions that exist only in code.
 - `architecture.md` (repo root) points at ADR-0084, the current target architecture.

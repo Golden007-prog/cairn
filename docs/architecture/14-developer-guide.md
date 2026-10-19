@@ -9,8 +9,8 @@ and `CONTRIBUTING.md`; this page tells you how to navigate and how to change thi
 3. **What does this subsystem own?** → `04`–`13`, plus the `CLAUDE.md` in that directory (`src/cairn/core/engine/CLAUDE.md`, `src/cairn/core/dispatch/CLAUDE.md`, `src/cairn/core/operator/CLAUDE.md`, `src/cairn/core/approval/CLAUDE.md`, `src/cairn/core/policy/CLAUDE.md`, `src/cairn/core/runtime/CLAUDE.md`, `src/cairn/core/storage/CLAUDE.md`, `src/cairn/core/triggers/CLAUDE.md`, `src/cairn/core/pack/CLAUDE.md`, `cairn/packs/CLAUDE.md`, `cairn/operators/CLAUDE.md`, and per-domain operator packs).
 4. **How does this workflow execute?** → `docs/golden-paths/*.md`.
 5. **Which files implement it?** → every golden path lists `path:line` anchors; `grep -n` from there.
-5b. **What can cairn run today?** → [16-capability-catalog.md](16-capability-catalog.md) (refresh with `/catalog`).
-6. **What can I safely change?** → [15-architecture-risks.md](15-architecture-risks.md) + the "Where to modify" section of each golden path + the invariant tables.
+5b. **What can cairn run today?** → 16-capability-catalog.md (refresh with `/catalog`).
+6. **What can I safely change?** → 15-architecture-risks.md + the "Where to modify" section of each golden path + the invariant tables.
 
 ## 2. Environment facts you cannot skip
 (The owner rulings behind these live in the directory `CLAUDE.md` files: `cairn/CLAUDE.md`

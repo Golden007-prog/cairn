@@ -447,7 +447,6 @@ def add_cmd(
     console.print(f"[dim]Then confirm:[/] [bold]cairn ls {dist}[/]")
 
 
-@app.command("build")
 def build_cmd(
     target: str = typer.Argument(
         ..., help="Pipeline class: `module:Class` or `path/to/file.py:Class`.",
@@ -590,3 +589,26 @@ def _warn_shadowing_authoring_file(compiled, dest: Path) -> None:  # noqa: ANN00
                 "Rename the authoring file (it does not need to match the "
                 "pack name) or run from a different directory.",
                 markup=True)
+
+
+# `pack build` compiles a cairn-sdk `@pipeline` class. The authoring SDK is the platform's
+# (ADR-0135): the command registers only when its toolchain is importable; otherwise a HIDDEN
+# stub says so and exits 1 — a public install does not list a verb it cannot run (#2536), the
+# same rule as `cairn ask` (cairn/cli/main.py).
+if importlib.util.find_spec("cairn_sdk") is not None:
+    app.command("build")(build_cmd)
+else:
+
+    @app.command(
+        name="build",
+        help="Compile a Python pipeline class — part of cairn-platform, not this install.",
+        context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+        add_help_option=False,
+        hidden=True,
+    )
+    def _build_not_installed() -> None:
+        console.print(
+            "[red]✗[/] `cairn pack build` (the authoring SDK) is part of cairn-platform; this "
+            "install does not include it. `cairn pack --help` lists the commands it has."
+        )
+        raise typer.Exit(1)

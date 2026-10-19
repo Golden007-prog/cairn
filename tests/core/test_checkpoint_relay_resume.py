@@ -184,6 +184,7 @@ def test_sdk_and_yaml_declare_checkpoint(tmp_path):
     """Reachability: the declaration survives SDK → YAML → FlowDef → StageRef."""
     import yaml as _yaml
 
+    pytest.importorskip("cairn_sdk", reason="the authoring SDK is the platform's (ADR-0135)")
     from cairn_sdk import compile_pipeline, flow, inp, pipeline
 
     @pipeline(series="h6", pack="t1248-h6")

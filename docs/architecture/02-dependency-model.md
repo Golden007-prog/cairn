@@ -91,7 +91,8 @@ largest source of coupling.
 - `core → operator packs`: zero static imports (test-enforced); engines and stages are
   reached through entry-point groups `cairn.dataflow_engines`, `cairn.flow_stages`,
   `cairn.dataflow_stages` (`src/cairn/core/dataflow/engine_registry.py`, `defs.py:98`).
-- `client/` has no `cairn` import (test-enforced). `sdk/` imports only `cairn_client`.
+- `client/` has no `cairn` import (test-enforced). `sdk/` imports only `cairn_client`; it is the
+  platform's, not part of the public core (ADR-0135).
   `ask/` (the wheel) imports only `cairn_client`; the platform's `cairn_platform/ask/__init__.py`
   binds seams lazily (ADR-0134 D6: the wiring left the public core).
 

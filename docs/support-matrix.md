@@ -87,6 +87,7 @@ the prod box with a real outcome). "Code exists" alone never earns SUPPORTED. Up
 
 ## Surfaces
 CLI, HTTP API (`console/openapi.json`, oasdiff-gated), console, MCP, `cairn-client`,
-`cairn-sdk`: SUPPORTED (CI TESTED: `test`, `web`, `build`, `api-compat`). Remote deployment
+`cairn-sdk`: SUPPORTED on the platform only; not part of the public core (ADR-0135)
+(CI TESTED: `test`, `web`, `build`, `api-compat`). Remote deployment
 (compose, EC2 script, Helm lint): SUPPORTED for compose (PRODUCTION PROVEN); Helm chart
 IN DEVELOPMENT (ADR-0104 D4).
