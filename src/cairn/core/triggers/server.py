@@ -405,6 +405,14 @@ class ResumeRequest(BaseModel):
     note: str | None = Field(None, description="free-text note recorded into the audit chain")
 
 
+#: #220 — where an authenticated request acts when it names no workspace and its
+#: account has no active one: an id no workspace can have (``~`` never survives
+#: :func:`_slug_workspace_id`) and so no store row. Reads find nothing, and every
+#: write is refused (#156: with auth on, a workspace with no row is refused), while
+#: the account-level routes — list, create, restore — still answer.
+_NO_WORKSPACE = "~no-workspace"
+
+
 def _slug_workspace_id(raw: str) -> str:
     """Slug-safe workspace id: lowercase, ``[a-z0-9-]``, collapsed dashes."""
     s = "".join(c if (c.isalnum() or c == "-") else "-" for c in (raw or "").strip().lower())
@@ -512,8 +520,8 @@ class _WorkspaceMiddleware:
             # caller's account owns it, so a member of ANY account read `default`
             # (the default account's) by sending no header. The implicit workspace
             # is authorized like a named one; a caller whose account does not own
-            # it acts in their account's home workspace (the one sign-in lands in),
-            # and an account with no workspace gets the same 404 as a refusal.
+            # it acts in their account's home workspace (the one sign-in lands in);
+            # an account with no active workspace acts in none (``_NO_WORKSPACE``).
             # Only the guard's claims count, so public paths are untouched.
             #
             # Fails CLOSED: the guard authenticated this caller, so a failure to
@@ -526,9 +534,6 @@ class _WorkspaceMiddleware:
                              type(e).__name__)
                 await self._unavailable(send)
                 return
-            if ws is None:
-                await self._not_found(send)
-                return
 
         token = set_current_workspace(ws)
         try:
@@ -537,12 +542,13 @@ class _WorkspaceMiddleware:
             reset_current_workspace(token)
 
     @staticmethod
-    async def _implicit_workspace_for(claims: dict[str, Any]) -> Optional[str]:
+    async def _implicit_workspace_for(claims: dict[str, Any]) -> str:
         """Where an authenticated request that names no workspace acts (#220).
 
         The implicit workspace (``CAIRN_WORKSPACE``, else ``default``) when the
         caller's account owns it; otherwise the account's home workspace;
-        ``None`` (→ 404) when the account has none. With auth on,
+        ``_NO_WORKSPACE`` when the account has no active one (nothing to read, no
+        write admitted, account-level routes still answer). With auth on,
         ``assert_workspace_allowed`` refuses a workspace with no row (#156), so
         a ``CAIRN_WORKSPACE`` that names none (a misconfiguration, warned about
         at startup) sends every caller to their home workspace."""
@@ -553,7 +559,7 @@ class _WorkspaceMiddleware:
         try:
             await assert_workspace_allowed(implicit, acct)
         except WorkspaceForbidden:
-            return await home_workspace(acct) or None
+            return await home_workspace(acct) or _NO_WORKSPACE
         return implicit
 
     @staticmethod

@@ -146,11 +146,17 @@ def test_the_request_reports_the_home_workspace_as_current(env):
     assert r.json()["current"] == "acme-ops"
 
 
-def test_an_account_with_no_workspace_gets_404_not_default(env):
+def test_an_account_with_no_workspace_reads_nothing_and_writes_nothing(env):
+    """No active workspace: the request acts in none. It reads nothing (never
+    `default`), cannot write, and can still create its first workspace."""
     with env.client() as c:
         r = c.get("/runs", headers=env.headers("carl@initech.com"))
-    assert r.status_code == 404, (r.status_code, r.text)
-    assert DEFAULT_RUN not in r.text
+        assert r.status_code == 200, (r.status_code, r.text)
+        assert _run_ids(r) == set() and DEFAULT_RUN not in r.text
+        w = c.put("/variables/K", json={"value": "v"}, headers=env.headers("carl@initech.com"))
+        assert w.status_code == 403, (w.status_code, w.text)
+        created = c.post("/workspaces", json={"name": "Initech"}, headers=env.headers("carl@initech.com"))
+    assert created.status_code == 200, (created.status_code, created.text)
 
 
 def test_cairn_workspace_is_authorized_like_the_default(env, monkeypatch):
@@ -222,11 +228,12 @@ def test_an_existing_cairn_workspace_is_not_warned_about(env, monkeypatch, caplo
     assert not [r for r in caplog.records if "names no workspace" in r.getMessage()]
 
 
-def test_an_account_whose_only_workspace_is_archived_gets_404(env):
+def test_an_account_whose_only_workspace_is_archived_reads_nothing(env):
     with env.client() as c:
         r = c.get("/runs", headers=env.headers("uma@umbrella.com"))
-    assert r.status_code == 404, (r.status_code, r.text)
-    assert DEFAULT_RUN not in r.text
+        listed = c.get("/workspaces", params={"include_archived": "true"}, headers=env.headers("uma@umbrella.com"))
+    assert r.status_code == 200 and _run_ids(r) == set() and DEFAULT_RUN not in r.text, (r.status_code, r.text)
+    assert listed.status_code == 200, (listed.status_code, listed.text)
 
 
 def test_a_headerless_start_launches_in_the_home_workspace_never_default(env, monkeypatch):

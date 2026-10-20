@@ -106,7 +106,8 @@ A request that names neither acts in the server's default workspace
 (`CAIRN_WORKSPACE`, else `default`) if your account owns it, and otherwise in
 your account's oldest active workspace, the one sign-in opens; a
 `CAIRN_WORKSPACE` that does not exist sends every such request there. An
-account with no active workspace gets `404`. The engine installs every
+account with no active workspace acts in none: it reads nothing and cannot
+write, but can still list, create and restore its workspaces. The engine installs every
 pipeline it finds into the `default` workspace when it starts.
 
 ## 6. Roles, and who decides a gate
