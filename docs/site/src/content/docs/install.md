@@ -202,7 +202,8 @@ CAIRN_API_PASSWORD=<choose one>     # or CAIRN_API_PASSWORD_HASH from `cairn rem
 
 Every API call then needs a token: `cairn remote login --endpoint <url>`.
 Only `/healthz`, `/token`, the sign-up, invite and provider sign-in routes
-under `/auth/`, and webhook receivers that check their own signature answer
+under `/auth/`, `/oauth/callback` (the redirect `cairn connect --via oauth`
+completes on; it checks its own single-use `state`), and webhook receivers that check their own signature answer
 without one.
 
 **Who can sign up: `CAIRN_SIGNUP`.**
