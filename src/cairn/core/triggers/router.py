@@ -173,6 +173,16 @@ def _header_get(headers: dict[str, str], name: str) -> Optional[str]:
     return None
 
 
+def _digest_equal(expected: str, provided: str) -> bool:
+    """Constant-time comparison of a computed signature with the header's value.
+
+    Compared as UTF-8 bytes: ``hmac.compare_digest`` raises ``TypeError`` on a
+    ``str`` holding a non-ASCII character, which turned a garbled header into a 500
+    instead of a refusal (#214). A non-ASCII value never equals a hex digest, so it
+    is simply unequal."""
+    return hmac.compare_digest(expected.encode("utf-8"), provided.encode("utf-8", "surrogatepass"))
+
+
 def verify_signature(spec: TriggerSpec, headers: dict[str, str], body: bytes) -> bool:
     """Scheme-aware signature verification against ``ingress.signature`` (#309).
 
@@ -202,20 +212,20 @@ def verify_signature(spec: TriggerSpec, headers: dict[str, str], body: bytes) ->
             return False
         base = b"v0:" + ts.encode("utf-8") + b":" + body
         expected = "v0=" + hmac.new(secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(expected, provided)
+        return _digest_equal(expected, provided)
 
     if scheme == "pagerduty_v1":
         # X-PagerDuty-Signature: "v1=<hex>[,v1=<hex>...]" — valid if ANY matches.
         expected = "v1=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
         return any(
-            hmac.compare_digest(expected, candidate.strip())
+            _digest_equal(expected, candidate.strip())
             for candidate in provided.split(",")
         )
 
     # hmac_sha256 — accept "sha256=<hex>" (GitHub style) and bare hex.
     provided_hex = provided.split("=", 1)[1] if "=" in provided else provided
     expected_hex = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected_hex, provided_hex)
+    return _digest_equal(expected_hex, provided_hex)
 
 
 # ─── generic YAML-driven provider ────────────────────────────────────

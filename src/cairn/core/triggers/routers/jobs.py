@@ -21,15 +21,12 @@ from typing import Any, Optional
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from cairn.core.operator.job_store import DEFAULT_LEASE_S, RemoteJobRecord, get_remote_job_store
 from cairn.core.operator.jobs import JobStatus, live_channel_env_for
-from cairn.core.triggers.auth import require_auth
-
-#: The ``sub`` prefix ``live_channel_env_for`` gives a per-run worker token.
-WORKER_SUB_PREFIX = "worker:"
+from cairn.core.triggers.auth import auth_enabled, authenticated_claims, require_auth, token_run_scope
 
 logger = logging.getLogger("cairn.triggers.jobs")
 
@@ -86,12 +83,22 @@ def _clamp_lease(seconds: int) -> int:
     return max(MIN_LEASE_S, min(MAX_LEASE_S, int(seconds or DEFAULT_LEASE_S)))
 
 
-def _scoped_run(subject: Optional[str]) -> Optional[str]:
-    """The run a per-run worker token is scoped to, or ``None`` for any other
-    caller (an operator credential, or keyless dev where ``subject`` is None)."""
-    if subject and subject.startswith(WORKER_SUB_PREFIX):
-        return subject[len(WORKER_SUB_PREFIX):] or None
-    return None
+def _scoped_run(request: Request, subject: Optional[str]) -> Optional[str]:
+    """The run this caller's token is scoped to, or ``None`` for an operator
+    credential (or keyless dev, where ``subject`` is None).
+
+    #208 — the guard's own rule (:func:`token_run_scope`) on the claims the guard
+    authenticated, so a token the guard treats as run-scoped (``scope=run-ingest``
+    or a ``worker:<run>`` subject) is run-scoped here too. ``""`` (a token whose
+    scope and subject disagree) matches no run. Without guard claims and with auth
+    off (keyless dev) the subject alone decides, as before; with auth ON a caller the
+    guard did not vet is run-scoped to no run (fail closed)."""
+    claims = authenticated_claims(request.scope)
+    if claims is None:
+        if auth_enabled() and subject:
+            return ""
+        claims = {"sub": subject} if subject else {}
+    return token_run_scope(claims)
 
 
 def _as_response(rec: RemoteJobRecord) -> ClaimedJobResponse:
@@ -113,12 +120,12 @@ def build_jobs_router(store_factory=None) -> APIRouter:
         return (store_factory or get_remote_job_store)()
 
     @r.post("/jobs/claim", response_model=Optional[ClaimedJobResponse], responses={204: {"description": "nothing to claim"}})
-    async def claim_job(body: ClaimRequest,
+    async def claim_job(body: ClaimRequest, request: Request,
                         subject: Annotated[Optional[str], Depends(require_auth)]) -> Any:
         """Hand this worker at most ONE queued job, with a lease. 204 when there
         is nothing it can run — an empty queue is not an error, and a worker
         polls this route forever."""
-        if _scoped_run(subject) is not None:
+        if _scoped_run(request, subject) is not None:
             raise HTTPException(
                 status_code=403,
                 detail="a per-run worker token ingests that run's events; claiming work "
@@ -132,7 +139,7 @@ def build_jobs_router(store_factory=None) -> APIRouter:
         return _as_response(rec)
 
     @r.post("/jobs/{job_id}/heartbeat", response_model=HeartbeatResponse)
-    async def heartbeat_job(job_id: str, body: HeartbeatRequest,
+    async def heartbeat_job(job_id: str, body: HeartbeatRequest, request: Request,
                             subject: Annotated[Optional[str], Depends(require_auth)]) -> HeartbeatResponse:
         """Extend the lease and record the worker's ``JobStatus``. Refused (200
         with ``accepted: false``) when this worker no longer holds the job — the
@@ -142,10 +149,10 @@ def build_jobs_router(store_factory=None) -> APIRouter:
         if body.status not in _STATES:
             raise HTTPException(status_code=422, detail=f"status must be one of {', '.join(_STATES)}")
         store = _store()
-        scoped = _scoped_run(subject)
+        scoped = _scoped_run(request, subject)
         if scoped is not None:
             owner = await store.get(job_id)
-            if owner is None or owner.run_id != scoped:
+            if not scoped or owner is None or owner.run_id != scoped:
                 raise HTTPException(status_code=403,
                                     detail=f"this token is scoped to run {scoped}; it cannot heartbeat {job_id}")
         ok = await store.heartbeat(
