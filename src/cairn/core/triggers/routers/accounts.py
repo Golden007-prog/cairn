@@ -24,6 +24,8 @@ from cairn.core.triggers import console_support as support
 from cairn.core.triggers.auth import (
     _oauth2_scheme,
     caller_identity,
+    is_env_admin,
+    require_admin,
     require_auth,
 )
 # Cycle-free (it imports only settings + pydantic), so module-top per CLAUDE.md
@@ -88,6 +90,24 @@ async def _provision_first_workspace(acct: Any, company: str, *, actor: str, sou
     return ws_id
 
 
+async def _owned_workspace_or_404(workspace_id: str, admin: Optional[str],
+                                  token: Optional[str]) -> Any:
+    """The workspace row an archive/restore acts on, once the caller may manage
+    it: an owner/admin (``require_admin``) of the account that owns it, or the
+    instance admin (the env admin, or anyone with auth off), as for replay
+    (#218). Another account's workspace answers the same 404 as a missing one."""
+    from cairn.core.workspace import WorkspaceForbidden, assert_workspace_allowed, get_workspace_store
+    ws = await get_workspace_store().get(workspace_id)
+    if ws is not None and not (admin is None or is_env_admin(admin)):
+        try:
+            await assert_workspace_allowed(workspace_id, await support.caller_account(token))
+        except WorkspaceForbidden:
+            ws = None
+    if ws is None:
+        raise HTTPException(status_code=404, detail=f"workspace {workspace_id!r} not found")
+    return ws
+
+
 def _oauth_refused(reason: str) -> RedirectResponse:
     """Back to the console's sign-in page with the reason it explains."""
     return RedirectResponse(f"/console/login?error={quote(reason)}", status_code=302)
@@ -149,17 +169,35 @@ def build_accounts_router() -> APIRouter:
         token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
     ) -> dict[str, Any]:
         """Create a workspace (auth-gated — it provisions a tenant boundary).
-        ``id`` is slug-derived from ``name`` when omitted; idempotent put. A fresh
-        workspace starts EMPTY (#258) — no auto-inherited workflows."""
-        from cairn.core.workspace import Workspace, get_workspace_store
+        ``id`` is slug-derived from ``name`` when omitted. A fresh workspace
+        starts EMPTY (#258) — no auto-inherited workflows.
+
+        Create-only, never an upsert: every store's ``put`` replaces the row, so
+        a create naming an existing id re-stamped that workspace with the
+        caller's account and handed it the owner's runs, variables and starts.
+        An id another account holds (``default`` included) answers 404, as a
+        cross-account read does; an id the caller's own account holds, 409. With no
+        explicit ``id`` the id is the first free slug of the name, as for a new
+        account's first workspace: two accounts may both call a workspace "Ops"."""
+        from cairn.core.workspace import DEFAULT_ACCOUNT, Workspace, get_workspace_store
         ws_id = _slug_workspace_id(body.id or body.name)
         if not ws_id:
             raise HTTPException(status_code=422, detail="workspace id/name must yield a non-empty slug")
         store = get_workspace_store()
+        acct = await support.caller_account(token)
+        if not body.id:
+            base, n = ws_id, 1
+            while await store.get(ws_id) is not None:
+                n += 1
+                ws_id = f"{base}-{n}"
+        existing = await store.get(ws_id)
+        if existing is not None:
+            if (existing.account_id or DEFAULT_ACCOUNT) != acct:
+                raise HTTPException(status_code=404, detail=f"workspace {ws_id!r} not found")
+            raise HTTPException(status_code=409, detail=f"workspace {ws_id!r} already exists")
         # #1610 — stamp the creating caller's account, so the workspace belongs
         # to a tenant from the moment it exists rather than being adopted later.
-        ws = await store.put(Workspace(id=ws_id, name=body.name.strip(),
-                                        account_id=await support.caller_account(token)))
+        ws = await store.put(Workspace(id=ws_id, name=body.name.strip(), account_id=acct))
         # #1571 — listeners provision what a workspace starts with (the
         # platform: a budget it can spend, so the run form's series picker
         # exists from the first visit).
@@ -167,7 +205,12 @@ def build_accounts_router() -> APIRouter:
         return ws.model_dump(mode="json")
 
     @r.delete("/workspaces/{workspace_id}", dependencies=[Depends(require_auth)])
-    async def archive_workspace_endpoint(workspace_id: str, confirm: str = "") -> dict[str, Any]:
+    async def archive_workspace_endpoint(
+        workspace_id: str,
+        admin: Annotated[Optional[str], Depends(require_admin)],
+        token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
+        confirm: str = "",
+    ) -> dict[str, Any]:
         """Soft-delete a workspace (#258): mark it ``archived`` + flip its installed-
         workflow records inactive. **Never** deletes runs / events / audit / pilot
         scores / artifacts — they stay queryable. ``default`` can't be archived.
@@ -182,16 +225,19 @@ def build_accounts_router() -> APIRouter:
         if workspace_id == DEFAULT_WORKSPACE:
             raise HTTPException(status_code=400, detail="the default workspace cannot be archived")
         store = get_workspace_store()
-        ws = await store.get(workspace_id)
-        if ws is None:
-            raise HTTPException(status_code=404, detail=f"workspace {workspace_id!r} not found")
+        ws = await _owned_workspace_or_404(workspace_id, admin, token)
         ws.status, ws.archived_at = "archived", utc_now_iso()
         await store.put(ws)
         n = await archive_workspace(workspace_id)
         return {"id": workspace_id, "status": "archived", "workflows_deactivated": n}
 
     @r.patch("/workspaces/{workspace_id}", dependencies=[Depends(require_auth)])
-    async def update_workspace_status(workspace_id: str, body: WorkspaceUpdate) -> dict[str, Any]:
+    async def update_workspace_status(
+        workspace_id: str,
+        body: WorkspaceUpdate,
+        admin: Annotated[Optional[str], Depends(require_admin)],
+        token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
+    ) -> dict[str, Any]:
         """Update a workspace's lifecycle status (#258). ``{status:"active"}``
         restores an archived workspace (reactivating its workflow records);
         ``{status:"archived"}`` is the archive path (same as DELETE)."""
@@ -200,9 +246,7 @@ def build_accounts_router() -> APIRouter:
         if body.status not in ("active", "archived"):
             raise HTTPException(status_code=422, detail="status must be 'active' or 'archived'")
         store = get_workspace_store()
-        ws = await store.get(workspace_id)
-        if ws is None:
-            raise HTTPException(status_code=404, detail=f"workspace {workspace_id!r} not found")
+        ws = await _owned_workspace_or_404(workspace_id, admin, token)
         ws.status = body.status
         ws.archived_at = utc_now_iso() if body.status == "archived" else None
         await store.put(ws)
