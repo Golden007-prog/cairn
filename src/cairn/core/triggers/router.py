@@ -380,10 +380,28 @@ class TriggerRouter:
         # #209 — a stored row knows the workspace it was created in; last-wins by
         # path like the specs themselves, so the workspace follows the winning spec.
         workspaces: dict[str, str] = {}
+        # #213 — rows of DIFFERENT workspaces at one ingress path would collapse to
+        # the last one loaded, so one workspace's sender would start runs in the
+        # other's. Such a path is refused: no receiver is mounted there at all.
+        contested: dict[str, set[str]] = {}
         for spec, ws in _store_trigger_rows():
             specs.append(spec)
-            workspaces[spec.ingress.path] = ws
+            if spec.ingress.transport == "bus":  # ADR-0131 D4 — not an HTTP route
+                continue
+            path = spec.ingress.path
+            if path in workspaces and workspaces[path] != ws:
+                contested.setdefault(path, {workspaces[path]}).add(ws)
+            workspaces[path] = ws
         specs = _dedupe_specs_by_path([s for s in specs if s.ingress.transport != "bus"])  # ADR-0131 D4
+        for path, claimants in sorted(contested.items()):
+            logger.error(
+                "trigger receiver %s NOT mounted: it is declared in more than one "
+                "workspace (%s). A receiver path belongs to one workspace; give each "
+                "workspace's receiver its own path under /triggers/",
+                path, ", ".join(sorted(claimants)),
+            )
+            workspaces.pop(path, None)
+        specs = [s for s in specs if s.ingress.path not in contested]
         router = cls(specs, run_template=run_template, run_environment=run_environment,
                      workspaces=workspaces)
         if getenv("CAIRN_TRIGGER_DURABLE", "").strip().lower() in ("1", "true", "yes", "on"):
@@ -448,7 +466,10 @@ class TriggerRouter:
             )
             if self.inbox is not None:
                 # Durable path: persist + return; the drain loop dispatches with retry.
-                rec = await self.inbox.enqueue(spec.source, spec.run.template, input_data)
+                # #212 — the record carries the receiver's workspace; the drain binds
+                # the run to it, exactly as the inline path binds it here.
+                rec = await self.inbox.enqueue(spec.source, spec.run.template, input_data,
+                                               workspace=self.workspace_for(spec))
                 res.run_id = rec.id
                 res.status = "queued"
             elif self._run_template is not None:

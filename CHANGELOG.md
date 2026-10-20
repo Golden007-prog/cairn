@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Security
+- With the durable trigger inbox on (`CAIRN_TRIGGER_DURABLE`), a queued webhook delivery keeps the workspace of the receiver that matched it, and its run starts there; it started in the default workspace. A replayed delivery keeps it too. Deliveries queued by an older server still start in the default workspace.
+- A webhook path declared in two workspaces is refused when the server loads its receivers: no receiver is mounted at that path and the server logs an error naming the workspaces. Before, the last one loaded took the path, so one workspace's sender could start runs in the other's.
+
 ## [0.1.3]
 
 ### Security
