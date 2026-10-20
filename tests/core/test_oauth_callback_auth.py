@@ -57,3 +57,26 @@ def test_only_the_callback_is_opened(client):
     assert not auth._is_public_path("/oauth/callback/x")
     assert not auth._is_public_path("/oauth")
     assert client.get("/runs").status_code == 401
+
+
+PAYLOAD = '<img src=x onerror=alert(1)><script>alert(2)</script>'
+
+
+def test_the_callback_page_escapes_what_it_echoes(client, monkeypatch):
+    """The callback is reachable without a token, so nothing it echoes may run as markup on the
+    console's origin: the provider's `error`, a broker failure message, or a connection id."""
+    r = client.get("/oauth/callback", params={"error": PAYLOAD})
+    assert r.status_code == 200 and "<img" not in r.text and "<script" not in r.text, r.text
+    assert "&lt;img src=x onerror=alert(1)&gt;" in r.text
+
+    async def _boom(self, *, state, code):
+        raise B.OAuthBrokerError(PAYLOAD)
+    monkeypatch.setattr(B.AuthlibBroker, "complete_authorization", _boom)
+    r = client.get("/oauth/callback", params={"state": "s1", "code": "c1"})
+    assert "<script" not in r.text and "&lt;script&gt;" in r.text, r.text
+
+    async def _cid(self, *, state, code):
+        return PAYLOAD
+    monkeypatch.setattr(B.AuthlibBroker, "complete_authorization", _cid)
+    r = client.get("/oauth/callback", params={"state": "s1", "code": "c1"})
+    assert "<img" not in r.text and "Connected: &lt;img" in r.text, r.text
