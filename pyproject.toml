@@ -29,6 +29,10 @@ dependencies = [
     # records; imports NOTHING from cairn.core (the golden tests in tests/core
     # hold compiler and loader together).
     "fastapi[standard]>=0.115.0",
+    # #207 — 1.0.1 is the first Starlette that ignores a malformed Host header when
+    # building request.url. The auth guard keys on scope['path'] either way; the
+    # floor keeps every other request.url reader honest too.
+    "starlette>=1.0.1",
     "langgraph>=0.4.0",
     "langchain-core>=0.3.0",
     "langchain-openai>=0.3.0",

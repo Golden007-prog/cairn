@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Security
+- The auth guard decides on the request path the router serves (`scope['path']`), not on `request.url.path`, which is rebuilt from the Host header and cut at a decoded `?` or `#`. A request to a protected route that names a public path that way now answers 401. The base dependencies require `starlette>=1.0.1`, the first release that ignores a malformed Host header when it builds `request.url`.
+- A webhook signature header with non-ASCII characters is refused with 401; it answered 500.
+- The pull-lane jobs router scopes a token exactly as the auth guard does: a token carrying `scope=run-ingest` is limited to its own run's job whatever its subject, so heartbeating another run's job answers 403 (it was treated as an operator credential there).
+
 ## [0.1.3]
 
 ### Security
