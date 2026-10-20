@@ -11,6 +11,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - With the durable trigger inbox on (`CAIRN_TRIGGER_DURABLE`), a queued webhook delivery keeps the workspace of the receiver that matched it, and its run starts there; it started in the default workspace. A replayed delivery keeps it too. Deliveries queued by an older server still start in the default workspace, and so does a delivery that a consumer on an older version takes from a shared NATS inbox (it ignores the new field).
 - A workspace can no longer take another workspace's webhook. Enabling the same pipeline in a second workspace used to replace the first workspace's trigger record and move it, because trigger ids and names are global. Now a declared webhook whose path, id or name another workspace already holds is not armed, and the server logs an error naming the path and both workspaces. The trigger store refuses such a write (`TriggerOwnedByAnotherWorkspace`) from any caller. If records from two workspaces still reach the server at one path, no receiver is mounted there. A workspace's webhook still replaces a pack or overlay receiver at the same path.
 
+### Changed
+- The installer (`https://docs.cairndev.sh/install.sh`) installs from PyPI by default; every package is published there from 0.1.3. `CAIRN_RELEASE=<version>` still takes cairn's wheels from that GitHub Release, which is the way to install a version before 0.1.3.
+- The CI gate examples (`examples/ci/`) install `cairndev`; they named the bare `cairn` distribution, which on PyPI is an unrelated project.
+
 ## [0.1.3]
 
 ### Security
