@@ -159,8 +159,11 @@ def test_a_queued_run_lands_in_its_receivers_workspace(durable, stored, started)
     assert ran == [("pipeline:p/x", "acme-ops")]
 
 
-def test_a_replayed_record_keeps_its_workspace(durable, stored):
+def test_a_replayed_record_keeps_its_workspace(durable, stored, monkeypatch):
     captured, ran = durable
+    # replay is admin-only (#218): the caller is the deployment's env admin
+    monkeypatch.setenv("CAIRN_API_USER", "admin")
+    monkeypatch.setenv("CAIRN_API_PASSWORD", "admin-password-for-tests")
     stored.append(_row("acme-hook", "acme-ops", "/triggers/acme"))
     with TestClient(build_app(Runner(), enable_scheduler=False)) as c:
         assert c.post("/triggers/acme", content=BODY, headers=_sig()).status_code == 200

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from cairn.core._time import utc_now_iso
 from cairn.core.engine.schema import ApprovalRecord, TriggerEvent
-from cairn.core.triggers.auth import _oauth2_scheme
+from cairn.core.triggers.auth import _oauth2_scheme, is_env_admin, require_admin
 from cairn.core.triggers.routers.reviews import decision_actor
 
 _APPROVE = ("approve", "approved", "yes", "y")
@@ -184,15 +184,40 @@ def build_inbox_router(trigger_router) -> APIRouter:
     r = APIRouter()
 
     @r.get("/triggers/inbox")
-    async def list_inbox(status: Optional[str] = None, limit: int = 100) -> dict[str, Any]:
+    async def list_inbox(
+        token: Annotated[Optional[str], Depends(_oauth2_scheme)],
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
         inbox = getattr(trigger_router, "inbox", None) if trigger_router is not None else None
         if inbox is None:
             return {"durable": False, "records": []}
-        recs = await inbox.list(status=status, limit=limit)
+        from cairn.core.storage.trigger_inbox import record_workspace  # noqa: PLC0415 — as replay below
+        from cairn.core.triggers.console_support import caller_account  # noqa: PLC0415 — as replay below
+        from cairn.core.workspace import (  # noqa: PLC0415 — routers ↔ server cycle
+            WorkspaceForbidden,
+            assert_workspace_allowed,
+            current_workspace,
+        )
+
+        # #218 — the caller's workspace only; a delivery's input is that tenant's data.
+        # The middleware authorizes a NAMED workspace; with no header the resolved one
+        # (the default) is not checked there, so it is asserted here (404, as ADR-0051 §4).
+        # ``limit`` bounds the records read.
+        ws = current_workspace()
+        try:
+            await assert_workspace_allowed(ws, await caller_account(token))
+        except WorkspaceForbidden:
+            raise HTTPException(status_code=404, detail="not found") from None
+        recs = [r for r in await inbox.list(status=status, limit=limit) if record_workspace(r) == ws]
         return {"durable": True, "records": [r.model_dump(mode="json") for r in recs]}
 
     @r.post("/triggers/inbox/replay")
-    async def replay_inbox(since: str) -> dict[str, Any]:
+    async def replay_inbox(
+        since: str,
+        admin: Annotated[Optional[str], Depends(require_admin)],
+        token: Annotated[Optional[str], Depends(_oauth2_scheme)],
+    ) -> dict[str, Any]:
         inbox = getattr(trigger_router, "inbox", None) if trigger_router is not None else None
         if inbox is None:
             raise HTTPException(
@@ -200,7 +225,14 @@ def build_inbox_router(trigger_router) -> APIRouter:
                 detail="durable trigger inbox is not enabled (set CAIRN_TRIGGER_DURABLE=1)",
             )
         from cairn.core.storage.trigger_inbox import replay_since
-        n = await replay_since(inbox, since=since)
+        from cairn.core.triggers.console_support import assert_can_write_workspace  # noqa: PLC0415 — routers ↔ server cycle
+
+        # #218 — an owner/admin (``require_admin``) replays their own workspace; a
+        # replayed delivery runs in its workspace, so only the instance admin (the
+        # env admin, or anyone with auth off) replays across workspaces.
+        everywhere = admin is None or is_env_admin(admin)
+        ws = None if everywhere else await assert_can_write_workspace(token)
+        n = await replay_since(inbox, since=since, workspace=ws)
         return {"replayed": n, "since": since}
 
     return r

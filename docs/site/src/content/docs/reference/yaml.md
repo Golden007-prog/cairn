@@ -184,6 +184,11 @@ pipeline and run records apply. A delivery the launch refuses (a policy `deny`,
 a ref that names no pipeline) is retried and then dead-lettered; it never runs.
 A delivery is done once its pipeline is launched: a leg that fails later is the
 pipeline's to retry, not the inbox's.
+`GET /triggers/inbox`
+lists only the caller's workspace's deliveries (one with no workspace belongs to
+`default`). `POST /triggers/inbox/replay` needs an owner or admin and replays only
+the caller's workspace; only the deployment's admin (`CAIRN_API_USER`) replays
+every workspace's. Any other caller gets `403`.
 
 A webhook declared by a pipeline belongs to the workspace that enabled it first.
 Enabling a pipeline in a second workspace does not arm a webhook whose path, or
