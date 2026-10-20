@@ -498,6 +498,29 @@ class _WorkspaceMiddleware:
                     # (ADR-0051 §4, same choice as `_run_in_ws_or_404`).
                     await self._not_found(send)
                     return
+        elif auth_enabled() and (claims := authenticated_claims(scope)) is not None:
+            # #220 — a request that names no workspace still acts in one: the
+            # implicit `CAIRN_WORKSPACE`, else `default`. Nothing checked that the
+            # caller's account owns it, so a member of ANY account read `default`
+            # (the default account's) by sending no header. The implicit workspace
+            # is authorized like a named one; a caller whose account does not own
+            # it acts in their account's home workspace (the one sign-in lands in),
+            # and an account with no workspace gets the same 404 as a refusal.
+            # Only the guard's claims count, so public paths are untouched.
+            try:
+                from cairn.core.triggers.console_support import account_from_claims
+                acct = await account_from_claims(claims)
+            except Exception:  # noqa: BLE001 — same best-effort resolution as above
+                acct = None
+            if acct:
+                try:
+                    await assert_workspace_allowed(current_workspace(), acct)
+                except WorkspaceForbidden:
+                    from cairn.core.triggers.routers.accounts import _home_workspace  # noqa: PLC0415 — routers ↔ server cycle
+                    ws = await _home_workspace(acct) or None
+                    if ws is None:
+                        await self._not_found(send)
+                        return
 
         token = set_current_workspace(ws)
         try:

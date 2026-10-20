@@ -87,9 +87,13 @@ curl -s -H "authorization: Bearer $TOKEN" https://cairn.example.com/workspaces
 ```
 
 A request acts in a workspace when its path starts with
-`/workspaces/<id>/`, or when it carries the `X-Cairn-Workspace` header. The
-engine installs every pipeline it finds into the `default` workspace when it
-starts.
+`/workspaces/<id>/`, or when it carries the `X-Cairn-Workspace` header. A
+request that names neither acts in the server's default workspace
+(`CAIRN_WORKSPACE`, else `default`) if your account owns it, and otherwise in
+your account's oldest active workspace, the one sign-in opens. An account with
+no active workspace gets `404`. A workspace another account owns answers `404`
+however it is named. The engine installs every pipeline it finds into the
+`default` workspace when it starts.
 
 ## 6. Roles, and who decides a gate
 

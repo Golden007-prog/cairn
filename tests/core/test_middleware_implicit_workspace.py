@@ -1,0 +1,227 @@
+"""The workspace a request acts in is authorized even when the request names none.
+
+``_WorkspaceMiddleware`` authorized a workspace only when the request named one
+(``X-Cairn-Workspace`` or the ``/workspaces/{id}/`` path). With neither, the
+request acted in the implicit workspace (``CAIRN_WORKSPACE``, else ``default``)
+and nothing checked that the caller's account owns it. ``default`` belongs to
+the default account, so with auth on, a member of any other account could read
+it by sending no header.
+
+Now the implicit workspace is authorized like a named one. A caller whose
+account does not own it acts in their account's home workspace (its oldest
+active one, where sign-in lands); an account with no workspace gets 404.
+
+Driven through the real app (``build_app``) with auth on and real account,
+workspace, run and pipeline stores.
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import types
+
+os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy")
+
+import pytest
+from fastapi.testclient import TestClient
+
+from cairn.core import account as A
+from cairn.core import workspace as W
+from cairn.core.engine.schema import TriggerEvent
+from cairn.core.storage import Run, SqliteRunStore
+from cairn.core.storage import pipeline_store as P
+from cairn.core.triggers import auth
+
+DEFAULT_RUN, ACME_RUN = "run-default-1", "run-acme-1"
+DEFAULT_PIPE, ACME_PIPE = "pipe-default-1", "pipe-acme-1"
+
+
+class _FakeRunner:
+    default_environment = "production"
+    skill_engine = types.SimpleNamespace(list_skills=lambda: [])
+
+    async def run(self, *a, **k):
+        return {}
+
+
+def _seed_runs(path: str) -> None:
+    async def _write():
+        s = SqliteRunStore(path)
+        for run_id, ws in ((DEFAULT_RUN, "default"), (ACME_RUN, "acme-ops")):
+            trig = TriggerEvent(source="manual", matched_pattern="p", service="svc")
+            await s.create(Run(id=run_id, trigger=trig, fingerprint=run_id, workspace_id=ws))
+            await s.append_event(run_id, "done", {})
+        s.close()
+
+    asyncio.run(_write())
+
+
+@pytest.fixture
+def env(monkeypatch, tmp_path):
+    for k in ("OBS_JWT_ALGORITHM", "OBS_ACCESS_TOKEN_EXPIRE_MINUTES", "OBS_REQUIRE_AUTH",
+              "OBS_WORKSPACE", "CAIRN_WORKSPACE", "OBS_STORAGE", "CAIRN_STORAGE",
+              "CAIRN_API_USER", "CAIRN_API_PASSWORD", "CAIRN_API_PASSWORD_HASH",
+              "OBS_API_USER", "OBS_API_PASSWORD", "OBS_API_PASSWORD_HASH"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("OBS_JWT_SECRET", "test-secret-long-enough-for-hs256-abc")
+    monkeypatch.setenv("CAIRN_API_USER", "root")  # the deployment's env admin
+    monkeypatch.setenv("CAIRN_API_PASSWORD", "root-password-for-tests")
+    monkeypatch.setenv("OBS_RUN_DB", str(tmp_path / "r.db"))
+    _seed_runs(str(tmp_path / "r.db"))
+
+    accounts = A.SqliteAccountStore(path=str(tmp_path / "accounts.db"))
+    monkeypatch.setattr(A, "_store", accounts)
+    workspaces = W.SqliteWorkspaceStore(path=str(tmp_path / "w.db"))
+    monkeypatch.setattr(W, "_store", workspaces)
+    pipes = P.InMemoryPipelineStore()
+    monkeypatch.setattr(P, "_default_store", pipes)
+
+    async def _seed() -> dict[str, tuple[str, str]]:
+        await accounts.put_account(A.Account(id="acme", name="Acme"))
+        await workspaces.put(W.Workspace(id="acme-ops", name="Acme ops", account_id="acme"))
+        await pipes.put(P.PipelineRecord(pipeline_id=DEFAULT_PIPE, pipeline_name="p", workspace_id="default"))
+        await pipes.put(P.PipelineRecord(pipeline_id=ACME_PIPE, pipeline_name="p", workspace_id="acme-ops"))
+        ids = {}
+        await accounts.put_account(A.Account(id="initech", name="Initech"))  # no workspace
+        for name, acct in (("bob@acme.com", "acme"), ("dana", A.DEFAULT_ACCOUNT),
+                           ("carl@initech.com", "initech")):
+            u = await A.create_user(name, f"{name}-password", store=accounts)
+            await A.add_member(acct, u.id, "member", store=accounts)
+            ids[name] = (u.id, acct)
+        return ids
+    users = asyncio.run(_seed())
+
+    def headers(who: str, ws: str | None = None) -> dict[str, str]:
+        if who == "root":
+            claims = {"sub": "root"}
+        else:
+            uid, acct = users[who]
+            claims = {"sub": uid, "account_id": acct}
+        h = {"Authorization": f"Bearer {auth.create_access_token(claims)}"}
+        if ws:
+            h["X-Cairn-Workspace"] = ws
+        return h
+
+    from cairn.core.triggers.server import build_app
+    return types.SimpleNamespace(
+        client=lambda: TestClient(build_app(_FakeRunner(), enable_scheduler=False)),
+        headers=headers)
+
+
+def _run_ids(r) -> set[str]:
+    return {i["id"] for i in r.json()["investigations"]}
+
+
+def _pipe_ids(r) -> set[str]:
+    return {p["pipeline_id"] for p in r.json()["pipelines"]}
+
+
+# ═══ the defect: no header, another account, the default workspace ═══════
+
+
+def test_without_a_header_another_accounts_member_lists_only_their_own_runs(env):
+    with env.client() as c:
+        r = c.get("/runs", headers=env.headers("bob@acme.com"))
+    assert r.status_code == 200, (r.status_code, r.text)
+    assert _run_ids(r) == {ACME_RUN}
+    assert DEFAULT_RUN not in r.text
+
+
+def test_without_a_header_another_accounts_member_lists_only_their_own_pipelines(env):
+    with env.client() as c:
+        r = c.get("/pipelines", headers=env.headers("bob@acme.com"))
+    assert r.status_code == 200, (r.status_code, r.text)
+    assert _pipe_ids(r) == {ACME_PIPE}
+    assert DEFAULT_PIPE not in r.text
+
+
+def test_the_request_reports_the_home_workspace_as_current(env):
+    with env.client() as c:
+        r = c.get("/workspaces", headers=env.headers("bob@acme.com"))
+    assert r.status_code == 200, (r.status_code, r.text)
+    assert r.json()["current"] == "acme-ops"
+
+
+def test_an_account_with_no_workspace_gets_404_not_default(env):
+    with env.client() as c:
+        r = c.get("/runs", headers=env.headers("carl@initech.com"))
+    assert r.status_code == 404, (r.status_code, r.text)
+    assert DEFAULT_RUN not in r.text
+
+
+def test_cairn_workspace_is_authorized_like_the_default(env, monkeypatch):
+    """The env-pinned implicit workspace is the resolved workspace too: its
+    own account uses it, any other account acts in its home workspace."""
+    monkeypatch.setenv("CAIRN_WORKSPACE", "acme-ops")
+    with env.client() as c:
+        bob = c.get("/runs", headers=env.headers("bob@acme.com"))
+        dana = c.get("/runs", headers=env.headers("dana"))
+    assert bob.status_code == 200 and _run_ids(bob) == {ACME_RUN}
+    assert dana.status_code == 200 and _run_ids(dana) == {DEFAULT_RUN}
+
+
+# ═══ unchanged ═════════════════════════════════════════════════════════════
+
+
+def test_a_default_account_member_still_reads_default_without_a_header(env):
+    with env.client() as c:
+        r = c.get("/runs", headers=env.headers("dana"))
+        p = c.get("/pipelines", headers=env.headers("dana"))
+    assert r.status_code == 200 and _run_ids(r) == {DEFAULT_RUN}
+    assert p.status_code == 200 and _pipe_ids(p) == {DEFAULT_PIPE}
+
+
+def test_the_env_admin_still_reads_default_without_a_header(env):
+    with env.client() as c:
+        r = c.get("/runs", headers=env.headers("root"))
+    assert r.status_code == 200 and _run_ids(r) == {DEFAULT_RUN}
+
+
+def test_a_member_naming_their_own_workspace_is_unchanged(env):
+    with env.client() as c:
+        r = c.get("/runs", headers=env.headers("bob@acme.com", "acme-ops"))
+        p = c.get("/workspaces/acme-ops/pipelines", headers=env.headers("bob@acme.com"))
+    assert r.status_code == 200 and _run_ids(r) == {ACME_RUN}
+    assert p.status_code == 200 and _pipe_ids(p) == {ACME_PIPE}
+
+
+def test_auth_off_is_unchanged(env, monkeypatch):
+    monkeypatch.delenv("OBS_JWT_SECRET", raising=False)
+    monkeypatch.delenv("CAIRN_JWT_SECRET", raising=False)
+    monkeypatch.delenv("CAIRN_API_USER", raising=False)
+    monkeypatch.delenv("CAIRN_API_PASSWORD", raising=False)
+    with env.client() as c:
+        r = c.get("/runs")
+    assert r.status_code == 200 and _run_ids(r) == {DEFAULT_RUN}
+
+
+def test_public_paths_are_unchanged_for_another_accounts_member(env):
+    """A token on a public path is not judged against the implicit workspace."""
+    with env.client() as c:
+        h = env.headers("bob@acme.com")
+        assert c.get("/healthz", headers=h).status_code == 200
+        assert c.get("/auth/status", headers=h).status_code == 200
+        tok = c.post("/token", data={"username": "bob@acme.com", "password": "bob@acme.com-password"},
+                     headers=h)
+        assert tok.status_code == 200, tok.text
+
+
+def test_a_worker_token_still_reports_its_run(env):
+    tok = auth.create_access_token({"sub": f"worker:{DEFAULT_RUN}", "scope": "run-ingest",
+                                    "run_id": DEFAULT_RUN})
+    with env.client() as c:
+        r = c.post(f"/runs/{DEFAULT_RUN}/events/ingest", headers={"Authorization": f"Bearer {tok}"},
+                   json={"events": [{"type": "log", "data": {"node": "n", "seq": 1}}]})
+    assert r.status_code == 200, (r.status_code, r.text)
+
+
+
+def test_account_level_routes_still_answer_without_a_header(env):
+    """What a signed-up user calls before any workspace is chosen (the console's
+    sign-in: who am I, which workspaces are mine) must not depend on owning the
+    implicit workspace."""
+    with env.client() as c:
+        h = env.headers("bob@acme.com")
+        got = {p: c.get(p, headers=h).status_code
+               for p in ("/workspaces", "/auth/me", "/operators/reports")}
+    assert got == {"/workspaces": 200, "/auth/me": 200, "/operators/reports": 200}, got
