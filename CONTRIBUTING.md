@@ -106,6 +106,13 @@ env -u CAIRN_STORAGE .venv/bin/pytest tests/core -q
 - **Docs honesty** — `uv run python scripts/audit_status.py` probes the
   claims in `status.yaml` against the code.
 
+## Documentation
+
+The user docs at [docs.cairndev.sh](https://docs.cairndev.sh) are the Astro/Starlight site in
+`docs/site/`. Every pull request gets a preview deployment, and `main` deploys to production.
+Build it locally with `npm ci && npm run build` in `docs/site/`. The one-line installer is
+`docs/site/public/install.sh`, served at `https://docs.cairndev.sh/install.sh`.
+
 ## Pull requests
 
 1. **One issue, one branch, one PR.** Open or claim a GitHub issue first;
