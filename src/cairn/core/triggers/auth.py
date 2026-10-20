@@ -30,6 +30,7 @@ from cairn.core.settings import getenv
 
 import logging
 import os
+import re
 import time
 from typing import Annotated, Any, Optional
 
@@ -109,6 +110,20 @@ _DOCS_PATHS = frozenset({
 # ``/triggers/manual`` · ``/triggers/scheduled`` · ``/triggers/inbox*`` routes
 # are console/CLI-facing and are never registered — they keep the JWT guard.
 _PUBLIC_TRIGGER_PATHS: set[str] = set()
+
+
+#: #58 — the ONE route that may carry the bearer in the query string: the run SSE
+#: stream, because a browser's ``EventSource`` cannot set an ``Authorization``
+#: header (#967). Anywhere else a token in the URL only ends up in proxy access
+#: logs, browser history and ``Referer`` headers. The guard runs OUTSIDE the
+#: workspace middleware, so it sees the console's ``/workspaces/{id}/…`` form
+#: before that prefix is rewritten away; both spellings match.
+_QUERY_TOKEN_PATH = re.compile(r"^(?:/workspaces/[^/]+)?/runs/[^/]+/stream$")
+
+
+def _query_token_allowed(method: str, path: str) -> bool:
+    """Whether ``?access_token=`` may authenticate this request (#58)."""
+    return method == "GET" and _QUERY_TOKEN_PATH.match(path) is not None
 
 
 def register_public_trigger_path(path: str) -> None:
@@ -634,9 +649,9 @@ def install_auth(app: FastAPI) -> None:
             token = authz[7:].strip() if authz[:7].lower() == "bearer " else ""
             # SSE: the browser's EventSource API can't set an Authorization
             # header (#967), so accept a same-origin `?access_token=<jwt>` query
-            # param as a fallback. The JWT is still validated below; short-lived
-            # + same-origin keeps the query-param exposure acceptable.
-            if not token:
+            # param as a fallback — on the run stream ONLY (#58). The JWT is
+            # still validated below.
+            if not token and _query_token_allowed(request.method, request.url.path):
                 token = (request.query_params.get("access_token") or "").strip()
             if not token or decode_subject(token) is None:
                 return JSONResponse(

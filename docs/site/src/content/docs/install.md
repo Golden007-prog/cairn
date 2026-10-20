@@ -201,6 +201,10 @@ CAIRN_API_PASSWORD=<choose one>     # or CAIRN_API_PASSWORD_HASH from `cairn rem
 ```
 
 Every API call then needs a token: `cairn remote login --endpoint <url>`.
+The token goes in the `Authorization: Bearer` header. The one exception is the run
+event stream, `GET /runs/{id}/stream`, which also accepts it as `?access_token=`
+because a browser's `EventSource` cannot set headers; every other route refuses a
+token in the query string with `401`.
 Only `/healthz`, `/token`, the sign-up, invite and provider sign-in routes
 under `/auth/`, and webhook receivers that check their own signature answer
 without one.
