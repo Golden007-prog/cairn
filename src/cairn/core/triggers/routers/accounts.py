@@ -187,13 +187,20 @@ def build_accounts_router() -> APIRouter:
         a create naming an existing id re-stamped that workspace with the
         caller's account and handed it the owner's runs, variables and starts.
         An id another account holds (``default`` included) answers 404, as a
-        cross-account read does; an id the caller's own account holds, 409."""
+        cross-account read does; an id the caller's own account holds, 409. With no
+        explicit ``id`` the id is the first free slug of the name, as for a new
+        account's first workspace: two accounts may both call a workspace "Ops"."""
         from cairn.core.workspace import DEFAULT_ACCOUNT, Workspace, get_workspace_store
         ws_id = _slug_workspace_id(body.id or body.name)
         if not ws_id:
             raise HTTPException(status_code=422, detail="workspace id/name must yield a non-empty slug")
         store = get_workspace_store()
         acct = await support.caller_account(token)
+        if not body.id:
+            base, n = ws_id, 1
+            while await store.get(ws_id) is not None:
+                n += 1
+                ws_id = f"{base}-{n}"
         existing = await store.get(ws_id)
         if existing is not None:
             if (existing.account_id or DEFAULT_ACCOUNT) != acct:

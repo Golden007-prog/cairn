@@ -169,3 +169,25 @@ def test_the_instance_admin_still_archives_any_workspace(env, monkeypatch):
         assert _archive(c, "acme-ops", h).status_code == 200
         assert _restore(c, "acme-ops", h).status_code == 200
     assert env.row("acme-ops").status == "active"
+
+
+def test_a_name_another_account_already_uses_gets_the_next_free_slug(env):
+    """The console creates by name; the id is the name's slug. Another account's
+    `acme-ops` must neither be taken over nor block the name: the create gets
+    `acme-ops-2` and the owner's row is unchanged."""
+    before = env.row("acme-ops")
+    with env.client() as c:
+        r = c.post("/workspaces", json={"name": "Acme Ops"}, headers=env.headers("gina"))
+    assert r.status_code == 200, (r.status_code, r.text)
+    assert r.json()["id"] == "acme-ops-2"
+    assert env.row("acme-ops-2").account_id == "globex"
+    after = env.row("acme-ops")
+    assert (after.account_id, after.name) == (before.account_id, before.name)
+
+
+def test_a_missing_workspace_is_404_for_its_would_be_owner_too(env):
+    with env.client() as c:
+        d = _archive(c, "no-such-ws", env.headers("alice"))
+        p = c.patch("/workspaces/no-such-ws", json={"status": "active"}, headers=env.headers("alice"))
+    assert (d.status_code, p.status_code) == (404, 404), (d.text, p.text)
+    assert env.row("no-such-ws") is None

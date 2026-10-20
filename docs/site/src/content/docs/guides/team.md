@@ -86,10 +86,12 @@ sees only its own workspaces. List and create them over the API:
 curl -s -H "authorization: Bearer $TOKEN" https://cairn.example.com/workspaces
 ```
 
-Creating a workspace whose id already exists is refused (`409` when your
-account holds it, `404` when another account does). Archiving or restoring
-one (`DELETE` or `PATCH /workspaces/<id>`) needs an owner or admin of the
-account that owns it; another account's workspace answers `404`.
+Creating a workspace with an explicit `id` that already exists is refused
+(`409` when your account holds it, `404` when another account does); a create
+by name alone takes the name's first free slug (`ops-2`). Archiving or
+restoring one (`DELETE` or `PATCH /workspaces/<id>`) needs an owner or admin of
+the account that owns it, or the deployment's admin (`CAIRN_API_USER`);
+another account's workspace answers `404`.
 
 A request acts in a workspace when its path starts with
 `/workspaces/<id>/`, or when it carries the `X-Cairn-Workspace` header. The
