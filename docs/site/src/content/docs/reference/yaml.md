@@ -178,7 +178,10 @@ runs in the server's default workspace. The `X-Cairn-Workspace` header does not
 change this, and a signed request without a token ignores it. A caller with a
 token must belong to the receiver's workspace, or the receiver answers `404`.
 With the durable trigger inbox on (`CAIRN_TRIGGER_DURABLE`), a queued delivery
-keeps its receiver's workspace, and so does a replayed one.
+keeps its receiver's workspace, and so does a replayed one. A queued delivery
+starts its pipeline the way an inline one does: policy gates, admission and the
+pipeline and run records apply. A delivery the launch refuses (a policy `deny`,
+a ref that names no pipeline) is retried and then dead-lettered; it never runs.
 
 A webhook declared by a pipeline belongs to the workspace that enabled it first.
 Enabling a pipeline in a second workspace does not arm a webhook whose path, or
