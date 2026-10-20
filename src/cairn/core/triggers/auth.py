@@ -575,6 +575,14 @@ def require_auth(token: Annotated[Optional[str], Depends(_oauth2_scheme)]) -> Op
     return subject
 
 
+def is_env_admin(subject: Optional[str]) -> bool:
+    """Whether ``subject`` (a JWT ``sub``) is the deployment's legacy env admin
+    (``CAIRN_API_USER`` with a configured password): the one principal with
+    full control of the instance by definition, beyond any account or workspace."""
+    cfg = _configured_user()
+    return bool(subject) and cfg is not None and subject == cfg[0]
+
+
 async def _subject_is_admin(subject: str) -> bool:
     """Whether ``subject`` (a JWT ``sub``) is an owner/admin (ADR-0054 §3).
 
