@@ -747,7 +747,8 @@ INVENTORY: list[SettingSpec] = [
     ),
     SettingSpec(
         "workspace", "CAIRN_WORKSPACE", "default", "auth",
-        "Workspace id used when no request context names one (core.workspace).",
+        "Workspace id used when no request context names one (core.workspace). With auth "
+        "on it must name an existing workspace (`default` always exists).",
     ),
     SettingSpec(
         "oauth_broker", "CAIRN_OAUTH_BROKER", "authlib", "auth",

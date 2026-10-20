@@ -89,7 +89,10 @@ curl -s -H "authorization: Bearer $TOKEN" https://cairn.example.com/workspaces
 A request acts in a workspace when its path starts with
 `/workspaces/<id>/`, or when it carries the `X-Cairn-Workspace` header. With
 sign-in on, naming a workspace that does not exist answers `404`, the same as
-naming one another account owns; create it first (`POST /workspaces`). The
+naming one another account owns; create it first (`POST /workspaces`). So
+`CAIRN_WORKSPACE`, if set, must name a workspace that exists (`default` always
+does). On a multi-node deployment the workspace store must be shared (Postgres):
+each node's SQLite store only knows the workspaces created on it. The
 engine installs every pipeline it finds into the `default` workspace when it
 starts.
 
