@@ -388,10 +388,15 @@ async def assert_workspace_allowed(
     * ``account_id`` falsy — auth is OFF (keyless dev / single-node OSS). The
       deployment has no tenant boundary to enforce, and inventing one here
       would break every existing single-node install.
-    * the workspace does not exist — a *missing* workspace is the caller's
-      problem to discover through the normal 404 path, not this function's to
-      pre-judge. Refusing here would let a caller probe which ids exist by
-      watching the shape of the failure.
+    * the workspace does not exist AND auth is off — keyless dev may name an id
+      before (or without) creating it.
+
+    With auth on, a workspace no store holds is refused like another account's:
+    no account owns it, so no caller may act in it. Otherwise any account could
+    write records under an id that does not exist yet, and whoever later
+    creates that workspace would inherit them. The refusal is the same
+    :class:`WorkspaceForbidden` (a 404 to the caller) as a cross-account id, so
+    it does not tell a caller which ids exist.
     """
     ws_id = (workspace_id or "").strip()
     acct = (account_id or "").strip()
@@ -399,6 +404,10 @@ async def assert_workspace_allowed(
         return
     ws = await (store or get_workspace_store()).get(ws_id)
     if ws is None:
+        from cairn.core.auth_tokens import auth_enabled  # noqa: PLC0415 — keep the import graph of this module flat
+
+        if auth_enabled():
+            raise WorkspaceForbidden(ws_id)
         return
     if (ws.account_id or DEFAULT_ACCOUNT) != acct:
         raise WorkspaceForbidden(ws_id)

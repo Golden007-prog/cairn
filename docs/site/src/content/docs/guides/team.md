@@ -87,14 +87,20 @@ curl -s -H "authorization: Bearer $TOKEN" https://cairn.example.com/workspaces
 ```
 
 A request acts in a workspace when its path starts with
-`/workspaces/<id>/`, or when it carries the `X-Cairn-Workspace` header. A
-request that names neither acts in the server's default workspace
-(`CAIRN_WORKSPACE`, else `default`) if your account owns it (one with no
-workspace record counts as the default account's), and otherwise in
-your account's oldest active workspace, the one sign-in opens. An account with
-no active workspace gets `404`. A workspace another account owns answers `404`
-however it is named. The engine installs every pipeline it finds into the
-`default` workspace when it starts.
+`/workspaces/<id>/`, or when it carries the `X-Cairn-Workspace` header. With
+sign-in on, naming a workspace that does not exist answers `404`, the same as
+naming one another account owns; create it first (`POST /workspaces`). So
+`CAIRN_WORKSPACE`, if set, must name a workspace that exists (`default` always
+does); the server warns at startup when it does not. On a multi-node deployment
+the workspace store must be shared (Postgres): each node's SQLite store only
+knows the workspaces created on it.
+
+A request that names neither acts in the server's default workspace
+(`CAIRN_WORKSPACE`, else `default`) if your account owns it, and otherwise in
+your account's oldest active workspace, the one sign-in opens; a
+`CAIRN_WORKSPACE` that does not exist sends every such request there. An
+account with no active workspace gets `404`. The engine installs every
+pipeline it finds into the `default` workspace when it starts.
 
 ## 6. Roles, and who decides a gate
 
