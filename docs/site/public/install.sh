@@ -34,8 +34,8 @@ main() {
   case "$extras" in *[!a-z0-9,-]*) die "CAIRN_EXTRAS may hold only lowercase letters, digits, '-' and ',' (got: $extras)";; esac
   case "$version" in *[!A-Za-z0-9.+-]*) die "CAIRN_VERSION is not a version (got: $version)";; esac
   case "$python" in ""|*[!0-9.]*) die "CAIRN_PYTHON is not a Python version (got: $python)";; esac
-  # cairn comes from PyPI. CAIRN_RELEASE=<version> takes cairn's wheels from that GitHub Release
-  # instead (a release whose PyPI upload is pending); third-party packages still come from PyPI.
+  # cairn comes from PyPI. CAIRN_RELEASE=<version> also looks for cairn's wheels in that GitHub
+  # Release (versions before 0.1.3, or a release whose PyPI upload is pending).
   release="${CAIRN_RELEASE:-}"
   case "$release" in *[!A-Za-z0-9.+-]*) die "CAIRN_RELEASE is not a version (got: $release)";; esac
 
