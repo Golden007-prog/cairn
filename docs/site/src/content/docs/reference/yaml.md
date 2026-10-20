@@ -182,6 +182,8 @@ keeps its receiver's workspace, and so does a replayed one. A queued delivery
 starts its pipeline the way an inline one does: policy gates, admission and the
 pipeline and run records apply. A delivery the launch refuses (a policy `deny`,
 a ref that names no pipeline) is retried and then dead-lettered; it never runs.
+A delivery is done once its pipeline is launched: a leg that fails later is the
+pipeline's to retry, not the inbox's.
 
 A webhook declared by a pipeline belongs to the workspace that enabled it first.
 Enabling a pipeline in a second workspace does not arm a webhook whose path, or
