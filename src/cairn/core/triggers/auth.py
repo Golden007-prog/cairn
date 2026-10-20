@@ -771,10 +771,16 @@ def install_auth(app: FastAPI) -> None:
 
     @app.middleware("http")
     async def _bearer_guard(request: Request, call_next):
+        # #207/#214 — every decision below keys on the ASGI path, the one routing and
+        # the workspace middleware use. ``request.url.path`` is rebuilt from the Host
+        # header and split with urlsplit, so it stops at a decoded ``?``/``#`` (sent
+        # as %3F/%23) and, on Starlette < 1.0.1, followed a malformed Host: either
+        # way it could name a public path while the router served a protected one.
+        path = request.scope["path"]
         if (
             auth_enabled()
             and request.method != "OPTIONS"
-            and not _is_public_path(request.url.path, request.method)
+            and not _is_public_path(path, request.method)
         ):
             authz = request.headers.get("Authorization", "")
             token = authz[7:].strip() if authz[:7].lower() == "bearer " else ""
@@ -782,7 +788,7 @@ def install_auth(app: FastAPI) -> None:
             # header (#967), so accept a same-origin `?access_token=<jwt>` query
             # param as a fallback — on the run stream ONLY (#58). The JWT is
             # still validated below.
-            if not token and _query_token_allowed(request.method, request.url.path):
+            if not token and _query_token_allowed(request.method, path):
                 token = (request.query_params.get("access_token") or "").strip()
             claims = decode_claims(token) if token else None
             if claims is None:
@@ -793,7 +799,7 @@ def install_auth(app: FastAPI) -> None:
                 )
             run_scope = token_run_scope(claims)
             if run_scope is not None and not _run_scoped_route_allowed(
-                run_scope, request.method, request.url.path
+                run_scope, request.method, path
             ):
                 return JSONResponse(
                     {"detail": "a per-run worker token may only report its own run "
