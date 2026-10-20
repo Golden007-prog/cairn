@@ -65,7 +65,7 @@ dependencies = [
     # Token *verification* is the hot path; password *hashing* for POST /token is pwdlib, below.
     "pyjwt>=2.8.0",
     # CLI dispatcher — backs the `cairn` script entry point. Light enough
-    # to be a base dep so `pip install cairn` gives users the CLI.
+    # to be a base dep so `pip install cairndev` gives users the CLI.
     "typer>=0.12.0",
     # ADR-0137 D2 — the builtin operator packs (packages/cairn-operator-<name>) and the core
     # contracts (packages/cairn-contracts-<name>) ship INSIDE this wheel: their import roots,

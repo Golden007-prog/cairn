@@ -13,8 +13,9 @@
 #   CAIRN_EXTRAS   comma-separated extras, e.g. hello,rag,metaflow (default: none)
 #   CAIRN_VERSION  an exact version to pin (default: the latest release)
 #   CAIRN_PYTHON   the Python uv provisions for the tool (default: 3.13)
-#   CAIRN_RELEASE  install cairn's wheels from this GitHub Release instead of PyPI, e.g. 0.1.3
-#                  (default: unset, PyPI); third-party packages still come from PyPI
+#   CAIRN_RELEASE  also look for cairn's wheels in this GitHub Release and pin cairndev and
+#                  cairn-client to it (default: unset, PyPI only); needed for versions before
+#                  0.1.3, which are not on PyPI; third-party packages still come from PyPI
 #
 # Uninstall: uv tool uninstall cairndev
 #
