@@ -842,14 +842,16 @@ def build_app(
         # CAIRN_TRIGGER_DURABLE made the router build an inbox (else inline as before).
         if router is not None and getattr(router, "inbox", None) is not None:
             from cairn.core.storage.trigger_inbox import run_drain_loop
-            from cairn.core.triggers.router import start_template_run
 
             async def _dispatch_record(rec):
                 # #212 — the run starts in the workspace that declared its receiver,
                 # as the inline delivery does (``None`` → the process default).
+                # #217 — through the launch door the inline delivery takes (the
+                # router's starter), never a bare compile-and-run: plan-time policy
+                # gates, admission and the run records apply to a queued delivery too.
                 ws_token = set_current_workspace(getattr(rec, "workspace", None))
                 try:
-                    await start_template_run(rec.template, rec.input)
+                    await router.start_queued(rec.template, rec.input)
                 finally:
                     reset_current_workspace(ws_token)
 

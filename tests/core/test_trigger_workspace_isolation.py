@@ -116,10 +116,12 @@ def env(monkeypatch, started):
 
 
 @pytest.fixture
-def durable(monkeypatch, env):
+def durable(monkeypatch, env, started):
     """Durable ingress on an in-memory inbox. The lifespan's drain loop is captured
-    (inbox + the server's own dispatch handler) so the test drains it once, and the
-    in-process start the drain makes is recorded with the workspace it ran in."""
+    (inbox + the server's own dispatch handler) so the test drains it once. The drain
+    starts a record through the launch door the inline path uses (#217), so ``ran``
+    is that door's record of each start and the workspace it ran in; the bare
+    in-process ``start_template_run`` is a tripwire."""
     monkeypatch.setenv("OBS_TRIGGER_DURABLE", "1")
     monkeypatch.setenv("OBS_TRIGGER_INBOX", "memory")
     captured: dict = {}
@@ -128,13 +130,10 @@ def durable(monkeypatch, env):
         captured["inbox"], captured["handler"] = inbox, handler
 
     monkeypatch.setattr(inbox_mod, "run_drain_loop", _capture)
-    ran: list[tuple[str, dict, str]] = []
+    async def _bare(ref, inputs):
+        raise AssertionError(f"the drain took the bare in-process path for {ref!r}")
 
-    async def _start(ref, inputs):
-        ran.append((ref, dict(inputs), current_workspace()))
-        return {}
-
-    monkeypatch.setattr(router_mod, "start_template_run", _start)
+    monkeypatch.setattr(router_mod, "start_template_run", _bare)
 
     async def _no_sync(**_kw):
         return 0
@@ -142,7 +141,7 @@ def durable(monkeypatch, env):
     import cairn.core.workflow_registry as wr
 
     monkeypatch.setattr(wr, "sync_discovered_pipelines", _no_sync)
-    return captured, ran
+    return captured, started.calls
 
 
 def _drain(captured) -> dict:
@@ -155,9 +154,9 @@ def test_a_queued_run_lands_in_its_receivers_workspace(durable, stored, started)
     with TestClient(build_app(Runner(), enable_scheduler=False)) as c:
         r = c.post("/triggers/acme", content=BODY, headers=_sig())
         assert r.status_code == 200, (r.status_code, r.text)
+        assert ran == []  # queued, not started inline
         assert _drain(captured)["dispatched"] == 1
-    assert [(ref, ws) for ref, _i, ws in ran] == [("pipeline:p/x", "acme-ops")]
-    assert started.calls == []  # queued, not started inline
+    assert ran == [("pipeline:p/x", "acme-ops")]
 
 
 def test_a_replayed_record_keeps_its_workspace(durable, stored):
