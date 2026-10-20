@@ -194,14 +194,21 @@ class SqliteTriggerStore:
 
     def _create_sync(self, t: StoredTrigger) -> None:
         # #213 — INSERT OR REPLACE drops any row holding this id OR name, whatever
-        # its workspace; refuse when that row is another workspace's.
-        _claim_conflict(self._conn.execute(
-            "SELECT id, name, workspace_id FROM triggers WHERE id=? OR name=?", (t.id, t.name),
-        ).fetchall(), t)
-        self._conn.execute(
-            "INSERT OR REPLACE INTO triggers (id, name, source, workspace_id, data) VALUES (?,?,?,?,?)",
-            (t.id, t.name, t.source, t.workspace_id, t.model_dump_json()),
-        )
+        # its workspace; refuse when that row is another workspace's. The check and the
+        # write share one IMMEDIATE transaction: another store instance on the same file
+        # (default_trigger_store() builds one per call) cannot write in between.
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            _claim_conflict(self._conn.execute(
+                "SELECT id, name, workspace_id FROM triggers WHERE id=? OR name=?", (t.id, t.name),
+            ).fetchall(), t)
+            self._conn.execute(
+                "INSERT OR REPLACE INTO triggers (id, name, source, workspace_id, data) VALUES (?,?,?,?,?)",
+                (t.id, t.name, t.source, t.workspace_id, t.model_dump_json()),
+            )
+        except BaseException:
+            self._conn.rollback()
+            raise
         self._conn.commit()
 
     async def create(self, t: StoredTrigger) -> StoredTrigger:
