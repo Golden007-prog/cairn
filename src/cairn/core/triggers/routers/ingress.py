@@ -184,16 +184,31 @@ def build_inbox_router(trigger_router) -> APIRouter:
     r = APIRouter()
 
     @r.get("/triggers/inbox")
-    async def list_inbox(status: Optional[str] = None, limit: int = 100) -> dict[str, Any]:
+    async def list_inbox(
+        token: Annotated[Optional[str], Depends(_oauth2_scheme)],
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
         inbox = getattr(trigger_router, "inbox", None) if trigger_router is not None else None
         if inbox is None:
             return {"durable": False, "records": []}
         from cairn.core.storage.trigger_inbox import record_workspace  # noqa: PLC0415 — as replay below
-        from cairn.core.workspace import current_workspace  # noqa: PLC0415 — routers ↔ server cycle
+        from cairn.core.triggers.console_support import caller_account  # noqa: PLC0415 — as replay below
+        from cairn.core.workspace import (  # noqa: PLC0415 — routers ↔ server cycle
+            WorkspaceForbidden,
+            assert_workspace_allowed,
+            current_workspace,
+        )
 
-        # #218 — the caller's workspace only (the middleware authorized it); a
-        # delivery's input is that tenant's data. ``limit`` bounds the records read.
+        # #218 — the caller's workspace only; a delivery's input is that tenant's data.
+        # The middleware authorizes a NAMED workspace; with no header the resolved one
+        # (the default) is not checked there, so it is asserted here (404, as ADR-0051 §4).
+        # ``limit`` bounds the records read.
         ws = current_workspace()
+        try:
+            await assert_workspace_allowed(ws, await caller_account(token))
+        except WorkspaceForbidden:
+            raise HTTPException(status_code=404, detail="not found") from None
         recs = [r for r in await inbox.list(status=status, limit=limit) if record_workspace(r) == ws]
         return {"durable": True, "records": [r.model_dump(mode="json") for r in recs]}
 

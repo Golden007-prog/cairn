@@ -12,7 +12,7 @@ the caller's workspace; only the instance admin (the deployment's env admin,
 ``CAIRN_API_USER``) replays across workspaces.
 
 Driven through the real app (``build_app``) with auth on and real account and
-workspace stores (sqlite in a temp dir).
+workspace stores (accounts in sqlite in a temp dir, workspaces in memory).
 """
 from __future__ import annotations
 
@@ -146,6 +146,16 @@ def test_another_tenants_workspace_cannot_be_named(app_env):
     assert r.status_code == 404, (r.status_code, r.text)
 
 
+def test_without_a_header_another_accounts_member_cannot_read_default(app_env):
+    """No X-Cairn-Workspace resolves to `default`, which the middleware does not check;
+    the route does (default belongs to the default account)."""
+    with TestClient(build_app(Runner(), enable_scheduler=False)) as c:
+        _seed_inbox(c, app_env)
+        r = c.get("/triggers/inbox", headers=app_env.headers("bob"))
+    assert r.status_code == 404, (r.status_code, r.text)
+    assert "of-None" not in r.text
+
+
 # ═══ replay ═══════════════════════════════════════════════════════════════
 
 
@@ -179,6 +189,14 @@ def test_an_admin_of_another_account_replays_only_their_own(app_env):
         r = c.post("/triggers/inbox/replay", params={"since": SINCE},
                    headers=app_env.headers("gina", "acme-ops"))
         assert r.status_code == 404, (r.status_code, r.text)
+
+
+def test_without_a_header_another_accounts_admin_cannot_replay_default(app_env):
+    with TestClient(build_app(Runner(), enable_scheduler=False)) as c:
+        _seed_inbox(c, app_env)
+        r = c.post("/triggers/inbox/replay", params={"since": SINCE}, headers=app_env.headers("alice"))
+        assert r.status_code == 403, (r.status_code, r.text)
+        assert _pending(c, app_env) == []
 
 
 def test_the_instance_admin_replays_every_workspace(app_env):
