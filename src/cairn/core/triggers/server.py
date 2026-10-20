@@ -845,7 +845,13 @@ def build_app(
             from cairn.core.triggers.router import start_template_run
 
             async def _dispatch_record(rec):
-                await start_template_run(rec.template, rec.input)
+                # #212 — the run starts in the workspace that declared its receiver,
+                # as the inline delivery does (``None`` → the process default).
+                ws_token = set_current_workspace(getattr(rec, "workspace", None))
+                try:
+                    await start_template_run(rec.template, rec.input)
+                finally:
+                    reset_current_workspace(ws_token)
 
             _inbox_drain["task"] = asyncio.create_task(run_drain_loop(router.inbox, _dispatch_record))
             logging.getLogger(__name__).info("[inbox] durable trigger drain started")

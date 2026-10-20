@@ -177,9 +177,17 @@ enabled. A receiver shipped as a pack or overlay file, with no such record,
 runs in the server's default workspace. The `X-Cairn-Workspace` header does not
 change this, and a signed request without a token ignores it. A caller with a
 token must belong to the receiver's workspace, or the receiver answers `404`.
-One exception today: with the durable trigger inbox on (`CAIRN_TRIGGER_DURABLE`),
-a queued delivery does not yet carry its receiver's workspace, so its run starts in
-the default workspace.
+With the durable trigger inbox on (`CAIRN_TRIGGER_DURABLE`), a queued delivery
+keeps its receiver's workspace, and so does a replayed one.
+
+A webhook declared by a pipeline belongs to the workspace that enabled it first.
+Enabling a pipeline in a second workspace does not arm a webhook whose path, or
+whose trigger record, another workspace already holds: that workspace keeps it,
+and the server logs an error naming the path and both workspaces. Give the second
+workspace's webhook its own `path`. If records from two workspaces still reach the
+server at one path, it mounts no receiver there and logs the same kind of error.
+One exception: a webhook enabled in any workspace still replaces a receiver shipped
+as a pack or overlay file at the same path.
 
 The Gmail preset is the one this affects in practice: Google's Pub/Sub push authenticates with
 its own OIDC token in `Authorization`, which is not a cairn token, so on a deployment with
