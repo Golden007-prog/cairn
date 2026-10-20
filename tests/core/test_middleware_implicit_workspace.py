@@ -83,8 +83,11 @@ def env(monkeypatch, tmp_path):
         await pipes.put(P.PipelineRecord(pipeline_id=ACME_PIPE, pipeline_name="p", workspace_id="acme-ops"))
         ids = {}
         await accounts.put_account(A.Account(id="initech", name="Initech"))  # no workspace
+        await accounts.put_account(A.Account(id="umbrella", name="Umbrella"))
+        await workspaces.put(W.Workspace(id="umbrella-ops", name="Umbrella ops", account_id="umbrella",
+                                         status="archived"))  # its only workspace, archived
         for name, acct in (("bob@acme.com", "acme"), ("dana", A.DEFAULT_ACCOUNT),
-                           ("carl@initech.com", "initech")):
+                           ("carl@initech.com", "initech"), ("uma@umbrella.com", "umbrella")):
             u = await A.create_user(name, f"{name}-password", store=accounts)
             await A.add_member(acct, u.id, "member", store=accounts)
             ids[name] = (u.id, acct)
@@ -158,6 +161,56 @@ def test_cairn_workspace_is_authorized_like_the_default(env, monkeypatch):
         dana = c.get("/runs", headers=env.headers("dana"))
     assert bob.status_code == 200 and _run_ids(bob) == {ACME_RUN}
     assert dana.status_code == 200 and _run_ids(dana) == {DEFAULT_RUN}
+
+
+def test_a_cairn_workspace_with_no_row_is_not_every_accounts(env, monkeypatch):
+    """Only `default` is seeded. A `CAIRN_WORKSPACE` with no row belongs to the
+    default account, as an unstamped workspace does, so another account's
+    member acts in their home workspace, not in it."""
+    monkeypatch.setenv("CAIRN_WORKSPACE", "no-row-ws")
+    with env.client() as c:
+        h = env.headers("bob@acme.com")
+        cur = c.get("/workspaces", headers=h).json()["current"]
+        r = c.get("/runs", headers=h)
+    assert cur == "acme-ops"
+    assert r.status_code == 200 and _run_ids(r) == {ACME_RUN}
+
+
+def test_an_account_whose_only_workspace_is_archived_gets_404(env):
+    with env.client() as c:
+        r = c.get("/runs", headers=env.headers("uma@umbrella.com"))
+    assert r.status_code == 404, (r.status_code, r.text)
+    assert DEFAULT_RUN not in r.text
+
+
+def test_a_headerless_start_launches_in_the_home_workspace_never_default(env, monkeypatch):
+    """The sharpest write: where a header-less POST /start would launch."""
+    from cairn.core.dispatch import start as start_mod
+
+    seen: list[str] = []
+
+    def _resolve(ref, kind=None):
+        seen.append(W.current_workspace())
+        raise start_mod.UnknownStartRefError(ref)
+    monkeypatch.setattr(start_mod, "resolve_start_ref", _resolve)
+    with env.client() as c:
+        r = c.post("/start", json={"ref": "pipeline:p/x"}, headers=env.headers("bob@acme.com"))
+    assert r.status_code == 404, (r.status_code, r.text)  # the stubbed ref, after authorization
+    assert seen == ["acme-ops"]
+
+
+def test_an_account_resolution_failure_fails_closed(env, monkeypatch):
+    """The guard authenticated the caller; failing to decide where they act is a
+    503, never the implicit workspace unchecked."""
+    from cairn.core.triggers import console_support
+
+    async def _boom(_claims):
+        raise RuntimeError("account store down")
+    monkeypatch.setattr(console_support, "account_from_claims", _boom)
+    with env.client() as c:
+        r = c.get("/runs", headers=env.headers("bob@acme.com"))
+    assert r.status_code == 503, (r.status_code, r.text)
+    assert DEFAULT_RUN not in r.text
 
 
 # ═══ unchanged ═════════════════════════════════════════════════════════════

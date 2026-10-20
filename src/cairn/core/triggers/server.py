@@ -507,26 +507,57 @@ class _WorkspaceMiddleware:
             # it acts in their account's home workspace (the one sign-in lands in),
             # and an account with no workspace gets the same 404 as a refusal.
             # Only the guard's claims count, so public paths are untouched.
+            #
+            # Fails CLOSED: the guard authenticated this caller, so a failure to
+            # decide where they act is a 503, never "act in the implicit workspace
+            # unchecked".
             try:
-                from cairn.core.triggers.console_support import account_from_claims
-                acct = await account_from_claims(claims)
-            except Exception:  # noqa: BLE001 — same best-effort resolution as above
-                acct = None
-            if acct:
-                try:
-                    await assert_workspace_allowed(current_workspace(), acct)
-                except WorkspaceForbidden:
-                    from cairn.core.triggers.routers.accounts import _home_workspace  # noqa: PLC0415 — routers ↔ server cycle
-                    ws = await _home_workspace(acct) or None
-                    if ws is None:
-                        await self._not_found(send)
-                        return
+                ws = await self._implicit_workspace_for(claims)
+            except Exception as e:  # noqa: BLE001 — the class is logged, never the token
+                logger.error("workspace middleware: could not resolve the caller's workspace (%s)",
+                             type(e).__name__)
+                await self._unavailable(send)
+                return
+            if ws is None:
+                await self._not_found(send)
+                return
 
         token = set_current_workspace(ws)
         try:
             await self.app(scope, receive, send)
         finally:
             reset_current_workspace(token)
+
+    @staticmethod
+    async def _implicit_workspace_for(claims: dict[str, Any]) -> Optional[str]:
+        """Where an authenticated request that names no workspace acts (#220).
+
+        The implicit workspace (``CAIRN_WORKSPACE``, else ``default``) when the
+        caller's account owns it; otherwise the account's home workspace;
+        ``None`` (→ 404) when the account has none. A missing workspace row is
+        the default account's, as an unstamped one is (``Workspace.account_id``
+        defaults to it): only ``default`` is seeded, so a ``CAIRN_WORKSPACE``
+        with no row must not become every account's."""
+        from cairn.core.triggers.console_support import account_from_claims, home_workspace  # noqa: PLC0415
+        from cairn.core.workspace import DEFAULT_ACCOUNT, get_workspace_store  # noqa: PLC0415
+
+        acct = await account_from_claims(claims)
+        implicit = current_workspace()
+        try:
+            if acct != DEFAULT_ACCOUNT and await get_workspace_store().get(implicit) is None:
+                raise WorkspaceForbidden(implicit)
+            await assert_workspace_allowed(implicit, acct)
+        except WorkspaceForbidden:
+            return await home_workspace(acct) or None
+        return implicit
+
+    @staticmethod
+    async def _unavailable(send: Any) -> None:
+        body = b'{"detail":"could not resolve the workspace for this request; try again"}'
+        await send({"type": "http.response.start", "status": 503,
+                    "headers": [(b"content-type", b"application/json"),
+                                (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
 
     @staticmethod
     async def _not_found(send: Any) -> None:
