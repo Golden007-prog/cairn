@@ -30,6 +30,7 @@ from cairn.core.settings import getenv
 
 import logging
 import os
+import re
 import time
 from typing import Annotated, Any, Optional
 
@@ -70,6 +71,12 @@ _OPEN_PATHS = frozenset({
     # `CAIRN_SIGNUP=invite` (the default) the POST refuses with `signup_closed`,
     # so being routable is not being open.
     "/auth/signup",
+    # #62 — the OAuth provider redirects the user's browser here with `state` +
+    # `code` and never a cairn bearer, so the guard 401'd every `cairn connect
+    # --via oauth` on an auth-enabled deployment. The route authenticates by its
+    # own single-use `state` (`AuthlibBroker.complete_authorization` pops it or
+    # refuses), the same posture as a signature-checked webhook.
+    "/oauth/callback",
 })
 
 #: #1612 — the invite PREVIEW is a prefix route (`/auth/invite/{token}`), so it
@@ -104,11 +111,86 @@ _DOCS_PATHS = frozenset({
 # NOT a JWT — a real Alertmanager/PagerDuty/GitHub sender presents an HMAC
 # signature, never a bearer token, so JWT-gating them 401s every real webhook
 # before its signature is ever checked (issue #686). Populated at app-build time
-# by ``_mount_trigger_routes`` for each signed ingress; a receiver with no
-# ``signature`` block is NOT registered here and stays JWT-gated. The legacy
+# by ``_mount_trigger_routes`` for each ingress whose signature is REQUIRED; a
+# receiver with no ``signature`` block, or with ``signature.required: false``
+# (an unsigned payload passes, so it authenticates nothing — #59), is NOT
+# registered here and stays JWT-gated. The legacy
 # ``/triggers/manual`` · ``/triggers/scheduled`` · ``/triggers/inbox*`` routes
 # are console/CLI-facing and are never registered — they keep the JWT guard.
 _PUBLIC_TRIGGER_PATHS: set[str] = set()
+
+
+#: #58 — the ONE route that may carry the bearer in the query string: the run SSE
+#: stream, because a browser's ``EventSource`` cannot set an ``Authorization``
+#: header (#967). Anywhere else a token in the URL only ends up in proxy access
+#: logs, browser history and ``Referer`` headers. The guard runs OUTSIDE the
+#: workspace middleware, so it sees the console's ``/workspaces/{id}/…`` form
+#: before that prefix is rewritten away; both spellings match.
+_QUERY_TOKEN_PATH = re.compile(r"^(?:/workspaces/[^/]+)?/runs/[^/]+/stream$")
+
+
+def _query_token_allowed(method: str, path: str) -> bool:
+    """Whether ``?access_token=`` may authenticate this request (#58)."""
+    return method == "GET" and _QUERY_TOKEN_PATH.match(path) is not None
+
+
+#: #205 — the request-state key under which the bearer guard records the token it
+#: authenticated, header or query string alike. ``_WorkspaceMiddleware`` (inside
+#: the guard) resolves the caller's tenant from THIS token, so the identity the
+#: guard accepted is the identity the workspace boundary checks.
+_AUTHENTICATED_TOKEN_STATE = "cairn_authenticated_token"
+
+
+def authenticated_token(scope: dict[str, Any]) -> Optional[str]:
+    """The token the bearer guard authenticated for this request, else ``None``
+    (auth off, or a public path the guard waved through)."""
+    state = scope.get("state")
+    tok = state.get(_AUTHENTICATED_TOKEN_STATE) if isinstance(state, dict) else None
+    return tok or None
+
+
+#: #120 — a per-run worker token (``live_channel_env_for`` mints ``sub=worker:<run>``,
+#: ``scope=run-ingest``, ``run_id=<run>``) exists to report ONE run. It reaches the
+#: routes the in-container reporter and the pull worker call, for that run only:
+#: its events up, its control requests down, and its job's heartbeat (the jobs
+#: router checks the job belongs to the run). Any other route answers 403. The
+#: guard runs outside the workspace middleware, so the ``/workspaces/{id}/`` form
+#: is matched too.
+RUN_INGEST_SCOPE = "run-ingest"
+_WORKER_SUB_PREFIX = "worker:"
+_RUN_SCOPED_ROUTES = (
+    ("POST", re.compile(r"^(?:/workspaces/[^/]+)?/runs/(?P<run>[^/]+)/events/ingest$")),
+    ("GET", re.compile(r"^(?:/workspaces/[^/]+)?/runs/(?P<run>[^/]+)/control$")),
+    ("POST", re.compile(r"^(?:/workspaces/[^/]+)?/jobs/[^/]+/heartbeat$")),
+)
+
+
+def token_run_scope(claims: dict[str, Any]) -> Optional[str]:
+    """The run a per-run worker token is scoped to; ``None`` for any other token.
+
+    A token carrying the scope or the worker subject is run-scoped. When its
+    ``run_id`` claim and its subject name different runs it is scoped to nothing
+    (``""``), so it reaches no route at all."""
+    sub = str(claims.get("sub") or "")
+    is_worker = sub.startswith(_WORKER_SUB_PREFIX)
+    if claims.get("scope") != RUN_INGEST_SCOPE and not is_worker:
+        return None
+    claimed = str(claims.get("run_id") or "")
+    from_sub = sub[len(_WORKER_SUB_PREFIX):] if is_worker else ""
+    if claimed and from_sub and claimed != from_sub:
+        return ""
+    return claimed or from_sub
+
+
+def _run_scoped_route_allowed(run_id: str, method: str, path: str) -> bool:
+    """Whether a token scoped to ``run_id`` may make this request (#120)."""
+    if not run_id:
+        return False
+    for allowed_method, pattern in _RUN_SCOPED_ROUTES:
+        m = pattern.match(path) if method == allowed_method else None
+        if m is not None and m.groupdict().get("run", run_id) == run_id:
+            return True
+    return False
 
 
 def register_public_trigger_path(path: str) -> None:
@@ -116,7 +198,8 @@ def register_public_trigger_path(path: str) -> None:
 
     Its authn is signature verification in the trigger router (``provider.verify``
     — the mechanism real webhook senders use), so the JWT middleware must let it
-    through. Called by ``_mount_trigger_routes`` per signed ingress (#686).
+    through. Called by ``_mount_trigger_routes`` per ingress whose signature is
+    required (#686, #59).
     """
     _PUBLIC_TRIGGER_PATHS.add(path)
 
@@ -634,14 +717,27 @@ def install_auth(app: FastAPI) -> None:
             token = authz[7:].strip() if authz[:7].lower() == "bearer " else ""
             # SSE: the browser's EventSource API can't set an Authorization
             # header (#967), so accept a same-origin `?access_token=<jwt>` query
-            # param as a fallback. The JWT is still validated below; short-lived
-            # + same-origin keeps the query-param exposure acceptable.
-            if not token:
+            # param as a fallback — on the run stream ONLY (#58). The JWT is
+            # still validated below.
+            if not token and _query_token_allowed(request.method, request.url.path):
                 token = (request.query_params.get("access_token") or "").strip()
-            if not token or decode_subject(token) is None:
+            claims = decode_claims(token) if token else None
+            if claims is None:
                 return JSONResponse(
                     {"detail": "Could not validate credentials"},
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     headers={"WWW-Authenticate": "Bearer"},
                 )
+            run_scope = token_run_scope(claims)
+            if run_scope is not None and not _run_scoped_route_allowed(
+                run_scope, request.method, request.url.path
+            ):
+                return JSONResponse(
+                    {"detail": "a per-run worker token may only report its own run "
+                               "(events/ingest, control, its job's heartbeat)"},
+                    status_code=status.HTTP_403_FORBIDDEN,
+                )
+            # #205 — hand the workspace middleware the credential checked here,
+            # so a query-string token is tenant-checked exactly like a header.
+            setattr(request.state, _AUTHENTICATED_TOKEN_STATE, token)
         return await call_next(request)

@@ -43,6 +43,7 @@ from cairn.core.leadership import Leadership  # #1533 — fleet-singleton electi
 from cairn.core import liveness  # ADR-0125 — the in-process leg owner lock
 from cairn.core.triggers.auth import (
     _oauth2_scheme,
+    authenticated_token,
     caller_identity,
     install_auth,
     register_public_trigger_path,
@@ -469,9 +470,15 @@ class _WorkspaceMiddleware:
         if ws:
             try:
                 from cairn.core.triggers.console_support import caller_account
-                hdrs = dict(scope.get("headers") or [])
-                raw = hdrs.get(b"authorization", b"").decode("latin-1")
-                bearer = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else None
+                # #205 — the token the bearer guard (outermost) authenticated:
+                # it may have come from `?access_token=` on the run stream, and
+                # the tenant check must judge that same credential. The header
+                # parse remains for requests the guard did not authenticate.
+                bearer = authenticated_token(scope)
+                if bearer is None:
+                    hdrs = dict(scope.get("headers") or [])
+                    raw = hdrs.get(b"authorization", b"").decode("latin-1")
+                    bearer = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else None
                 acct = await caller_account(bearer) if bearer else None
             except Exception:  # noqa: BLE001 — unauthenticated is not unauthorized
                 acct = None
@@ -1093,23 +1100,26 @@ def _mount_trigger_routes(app: FastAPI, router: "TriggerRouter", *,
         )
         # #686: a signed webhook receiver authenticates by signature, not JWT —
         # a real Alertmanager/PagerDuty sender has no bearer token. Exempt it
-        # from the JWT guard so provider.verify() is the gate. A spec WITHOUT a
-        # signature block stays JWT-gated (no other authn to fall back on).
+        # from the JWT guard so provider.verify() is the gate. #59: only when
+        # the signature is REQUIRED — an optional one authenticates nothing (an
+        # unsigned payload passes verify), so that receiver, like one with no
+        # signature block, keeps the JWT guard when auth is on.
         sig = spec.ingress.signature
-        if sig is not None:
+        signature_authed = sig is not None and sig.required
+        if signature_authed:
             register_public_trigger_path(spec.ingress.path)
-            if not sig.required:
-                logger.warning(
-                    "trigger ingress %s is PUBLIC and accepts UNSIGNED payloads "
-                    "(signature.required=false) — set a webhook secret + "
-                    "required:true before exposing it on the open internet",
-                    spec.ingress.path,
-                )
+        elif sig is not None:
+            logger.warning(
+                "trigger ingress %s has signature.required=false, so it is NOT public: "
+                "with auth on it needs a bearer token. Set a webhook secret + "
+                "required: true for senders that sign but carry no token",
+                spec.ingress.path,
+            )
         logger.info(
             "mounted trigger route %s %s → %s%s",
             spec.ingress.method, spec.ingress.path,
             spec.run.template if spec.run else "(no run target)",
-            " [public: signature-authed]" if sig is not None else " [jwt-gated]",
+            " [public: signature-authed]" if signature_authed else " [jwt-gated]",
         )
 
 
