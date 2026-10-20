@@ -418,11 +418,24 @@ async def drain_once(
     return {"dispatched": dispatched, "retried": retried, "dead": dead, "claimed": len(due)}
 
 
-async def replay_since(inbox: TriggerInbox, *, since: str, limit: int = 500) -> int:
+def record_workspace(rec: InboxRecord) -> str:
+    """The workspace a record belongs to: the one it carries, else ``default``
+    (a pack/overlay receiver's delivery, or one an older server queued) — #218."""
+    from cairn.core.workspace import DEFAULT_WORKSPACE  # noqa: PLC0415 — as the other storage modules
+
+    return rec.workspace or DEFAULT_WORKSPACE
+
+
+async def replay_since(inbox: TriggerInbox, *, since: str, limit: int = 500,
+                       workspace: Optional[str] = None) -> int:
     """Re-enqueue terminal (done/dead) records created at/after ``since`` as fresh
-    pending records. Returns how many were re-enqueued."""
+    pending records. ``workspace`` set → only that workspace's records
+    (:func:`record_workspace`); ``None`` → every workspace's. Returns how many were
+    re-enqueued."""
     count = 0
     for rec in await inbox.list(since=since, limit=limit):
+        if workspace is not None and record_workspace(rec) != workspace:
+            continue
         if rec.status in (DONE, DEAD):
             await inbox.enqueue(rec.source, rec.template, rec.input, max_attempts=rec.max_attempts,
                                 workspace=rec.workspace)
@@ -474,6 +487,7 @@ __all__ = [
     "TriggerInbox",
     "drain_once",
     "get_trigger_inbox",
+    "record_workspace",
     "replay_since",
     "run_drain_loop",
 ]
