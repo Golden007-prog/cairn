@@ -472,15 +472,15 @@ class _WorkspaceMiddleware:
         # a bad token, or auth switched off all resolve to None, which
         # `assert_workspace_allowed` treats as "no tenant boundary to enforce".
         if ws:
+            # #205 — the identity the bearer guard (outermost) authenticated:
+            # it may have come from `?access_token=` on the run stream, and
+            # the tenant check must judge that same credential. #209 — the
+            # guard's decoded claims, not its token, so no second decode can
+            # fail in between and skip the check. The header parse remains
+            # for requests the guard did not authenticate.
+            claims = authenticated_claims(scope)
             try:
                 from cairn.core.triggers.console_support import account_from_claims, caller_account
-                # #205 — the identity the bearer guard (outermost) authenticated:
-                # it may have come from `?access_token=` on the run stream, and
-                # the tenant check must judge that same credential. #209 — the
-                # guard's decoded claims, not its token, so no second decode can
-                # fail in between and skip the check. The header parse remains
-                # for requests the guard did not authenticate.
-                claims = authenticated_claims(scope)
                 if claims is not None:
                     acct = await account_from_claims(claims)
                 else:
@@ -488,7 +488,15 @@ class _WorkspaceMiddleware:
                     raw = hdrs.get(b"authorization", b"").decode("latin-1")
                     bearer = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else None
                     acct = await caller_account(bearer) if bearer else None
-            except Exception:  # noqa: BLE001 — unauthenticated is not unauthorized
+            except Exception as e:  # noqa: BLE001 — unauthenticated is not unauthorized
+                if claims is not None:
+                    # The guard authenticated this caller, so failing to resolve
+                    # their account fails CLOSED (503), as the implicit branch
+                    # does, never "act in the named workspace unchecked".
+                    logger.error("workspace middleware: could not resolve the caller's account (%s)",
+                                 type(e).__name__)
+                    await self._unavailable(send)
+                    return
                 acct = None
             if acct:
                 try:

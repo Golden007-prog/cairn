@@ -213,6 +213,20 @@ def test_an_account_resolution_failure_fails_closed(env, monkeypatch):
     assert DEFAULT_RUN not in r.text
 
 
+def test_a_named_workspace_also_fails_closed_when_account_resolution_raises(env, monkeypatch):
+    """The named-workspace branch: an authenticated caller whose account cannot be
+    resolved gets 503, never the named workspace unchecked."""
+    from cairn.core.triggers import console_support
+
+    async def _boom(_claims):
+        raise RuntimeError("account store down")
+    monkeypatch.setattr(console_support, "account_from_claims", _boom)
+    with env.client() as c:
+        r = c.get("/runs", headers=env.headers("bob@acme.com", "acme-ops"))
+    assert r.status_code == 503, (r.status_code, r.text)
+    assert ACME_RUN not in r.text
+
+
 # ═══ unchanged ═════════════════════════════════════════════════════════════
 
 
