@@ -64,9 +64,9 @@ class _Started:
 
 def _env(monkeypatch) -> None:
     for k in ("OBS_JWT_ALGORITHM", "OBS_ACCESS_TOKEN_EXPIRE_MINUTES", "OBS_REQUIRE_AUTH",
-              "OBS_WORKSPACE", "CAIRN_WORKSPACE"):
+              "OBS_WORKSPACE", "CAIRN_WORKSPACE", "OBS_JWT_SECRET"):
         monkeypatch.delenv(k, raising=False)
-    monkeypatch.setenv("OBS_JWT_SECRET", "test-secret-long-enough-for-hs256-abc")
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret-long-enough-for-hs256-abc")
     monkeypatch.setenv("HOOK_SECRET", SECRET)
     monkeypatch.setattr(auth, "_PUBLIC_TRIGGER_PATHS", set())  # module state: start clean
 

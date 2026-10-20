@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from cairn.core.operator.job_store import DEFAULT_LEASE_S, RemoteJobRecord, get_remote_job_store
 from cairn.core.operator.jobs import JobStatus, live_channel_env_for
-from cairn.core.triggers.auth import authenticated_claims, require_auth, token_run_scope
+from cairn.core.triggers.auth import auth_enabled, authenticated_claims, require_auth, token_run_scope
 
 logger = logging.getLogger("cairn.triggers.jobs")
 
@@ -90,10 +90,13 @@ def _scoped_run(request: Request, subject: Optional[str]) -> Optional[str]:
     #208 — the guard's own rule (:func:`token_run_scope`) on the claims the guard
     authenticated, so a token the guard treats as run-scoped (``scope=run-ingest``
     or a ``worker:<run>`` subject) is run-scoped here too. ``""`` (a token whose
-    scope and subject disagree) matches no run. Without guard claims (auth off) the
-    subject alone decides, as before."""
+    scope and subject disagree) matches no run. Without guard claims and with auth
+    off (keyless dev) the subject alone decides, as before; with auth ON a caller the
+    guard did not vet is run-scoped to no run (fail closed)."""
     claims = authenticated_claims(request.scope)
     if claims is None:
+        if auth_enabled() and subject:
+            return ""
         claims = {"sub": subject} if subject else {}
     return token_run_scope(claims)
 
@@ -149,7 +152,7 @@ def build_jobs_router(store_factory=None) -> APIRouter:
         scoped = _scoped_run(request, subject)
         if scoped is not None:
             owner = await store.get(job_id)
-            if owner is None or owner.run_id != scoped:
+            if not scoped or owner is None or owner.run_id != scoped:
                 raise HTTPException(status_code=403,
                                     detail=f"this token is scoped to run {scoped}; it cannot heartbeat {job_id}")
         ok = await store.heartbeat(
