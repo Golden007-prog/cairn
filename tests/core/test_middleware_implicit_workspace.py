@@ -33,6 +33,7 @@ from cairn.core.storage import pipeline_store as P
 from cairn.core.triggers import auth
 
 DEFAULT_RUN, ACME_RUN = "run-default-1", "run-acme-1"
+NOROW_WS, NOROW_RUN = "no-row-ws", "run-norow-1"  # a run stamped with a workspace that has no row
 DEFAULT_PIPE, ACME_PIPE = "pipe-default-1", "pipe-acme-1"
 
 
@@ -47,7 +48,7 @@ class _FakeRunner:
 def _seed_runs(path: str) -> None:
     async def _write():
         s = SqliteRunStore(path)
-        for run_id, ws in ((DEFAULT_RUN, "default"), (ACME_RUN, "acme-ops")):
+        for run_id, ws in ((DEFAULT_RUN, "default"), (ACME_RUN, "acme-ops"), (NOROW_RUN, NOROW_WS)):
             trig = TriggerEvent(source="manual", matched_pattern="p", service="svc")
             await s.create(Run(id=run_id, trigger=trig, fingerprint=run_id, workspace_id=ws))
             await s.append_event(run_id, "done", {})
@@ -164,16 +165,61 @@ def test_cairn_workspace_is_authorized_like_the_default(env, monkeypatch):
 
 
 def test_a_cairn_workspace_with_no_row_is_not_every_accounts(env, monkeypatch):
-    """Only `default` is seeded. A `CAIRN_WORKSPACE` with no row belongs to the
-    default account, as an unstamped workspace does, so another account's
-    member acts in their home workspace, not in it."""
-    monkeypatch.setenv("CAIRN_WORKSPACE", "no-row-ws")
+    """With auth on a workspace with no row is refused (#156), so a
+    `CAIRN_WORKSPACE` naming one sends another account's member to their home
+    workspace, not into it."""
+    monkeypatch.setenv("CAIRN_WORKSPACE", NOROW_WS)
     with env.client() as c:
         h = env.headers("bob@acme.com")
         cur = c.get("/workspaces", headers=h).json()["current"]
         r = c.get("/runs", headers=h)
     assert cur == "acme-ops"
     assert r.status_code == 200 and _run_ids(r) == {ACME_RUN}
+
+
+def test_a_cairn_workspace_with_no_row_sends_a_default_member_to_default(env, monkeypatch):
+    monkeypatch.setenv("CAIRN_WORKSPACE", NOROW_WS)
+    with env.client() as c:
+        h = env.headers("dana")
+        cur = c.get("/workspaces", headers=h).json()["current"]
+        r = c.get("/runs", headers=h)
+    assert cur == "default"
+    assert r.status_code == 200 and _run_ids(r) == {DEFAULT_RUN}
+    assert NOROW_RUN not in r.text
+
+
+def test_a_worker_with_a_cairn_workspace_with_no_row_never_acts_in_it(env, monkeypatch):
+    """A per-run worker token is the default account's: with no header it acts
+    in `default`, so its run there still reports, and a run stamped with the
+    row-less workspace answers 404 (the run guard compares it to `default`)."""
+    monkeypatch.setenv("CAIRN_WORKSPACE", NOROW_WS)
+
+    def _post(run_id):
+        tok = auth.create_access_token({"sub": f"worker:{run_id}", "scope": "run-ingest", "run_id": run_id})
+        return c.post(f"/runs/{run_id}/events/ingest", headers={"Authorization": f"Bearer {tok}"},
+                      json={"events": [{"type": "log", "data": {"node": "n", "seq": 1}}]})
+    with env.client() as c:
+        in_default, in_norow = _post(DEFAULT_RUN), _post(NOROW_RUN)
+    assert in_default.status_code == 200, (in_default.status_code, in_default.text)
+    assert in_norow.status_code == 404, (in_norow.status_code, in_norow.text)
+
+
+def test_a_cairn_workspace_with_no_row_is_warned_about_once_at_startup(env, monkeypatch, caplog):
+    monkeypatch.setenv("CAIRN_WORKSPACE", NOROW_WS)
+    with caplog.at_level("WARNING", logger="cairn.trigger_server"):
+        with env.client() as c:
+            c.get("/runs", headers=env.headers("dana"))
+            c.get("/runs", headers=env.headers("bob@acme.com"))
+    hits = [r for r in caplog.records if "CAIRN_WORKSPACE" in r.getMessage() and NOROW_WS in r.getMessage()]
+    assert len(hits) == 1, [r.getMessage() for r in caplog.records]
+
+
+def test_an_existing_cairn_workspace_is_not_warned_about(env, monkeypatch, caplog):
+    monkeypatch.setenv("CAIRN_WORKSPACE", "acme-ops")
+    with caplog.at_level("WARNING", logger="cairn.trigger_server"):
+        with env.client():
+            pass
+    assert not [r for r in caplog.records if "names no workspace" in r.getMessage()]
 
 
 def test_an_account_whose_only_workspace_is_archived_gets_404(env):

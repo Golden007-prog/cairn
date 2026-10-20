@@ -542,18 +542,15 @@ class _WorkspaceMiddleware:
 
         The implicit workspace (``CAIRN_WORKSPACE``, else ``default``) when the
         caller's account owns it; otherwise the account's home workspace;
-        ``None`` (→ 404) when the account has none. A missing workspace row is
-        the default account's, as an unstamped one is (``Workspace.account_id``
-        defaults to it): only ``default`` is seeded, so a ``CAIRN_WORKSPACE``
-        with no row must not become every account's."""
+        ``None`` (→ 404) when the account has none. With auth on,
+        ``assert_workspace_allowed`` refuses a workspace with no row (#156), so
+        a ``CAIRN_WORKSPACE`` that names none (a misconfiguration, warned about
+        at startup) sends every caller to their home workspace."""
         from cairn.core.triggers.console_support import account_from_claims, home_workspace  # noqa: PLC0415
-        from cairn.core.workspace import DEFAULT_ACCOUNT, get_workspace_store  # noqa: PLC0415
 
         acct = await account_from_claims(claims)
         implicit = current_workspace()
         try:
-            if acct != DEFAULT_ACCOUNT and await get_workspace_store().get(implicit) is None:
-                raise WorkspaceForbidden(implicit)
             await assert_workspace_allowed(implicit, acct)
         except WorkspaceForbidden:
             return await home_workspace(acct) or None
@@ -764,6 +761,21 @@ def build_app(
             _hash_problem = password_hash_problem()
             if _hash_problem:
                 raise RuntimeError(_hash_problem)
+            # #220/#156 — with auth on, `CAIRN_WORKSPACE` must name a workspace that
+            # exists: one that does not is refused, so every header-less request
+            # acts in its caller's home workspace instead. Said once, at boot.
+            _implicit_ws = getenv("CAIRN_WORKSPACE", "").strip()
+            if _implicit_ws:
+                try:
+                    from cairn.core.workspace import get_workspace_store  # noqa: PLC0415
+                    if await get_workspace_store().get(_implicit_ws) is None:
+                        logger.warning(
+                            "CAIRN_WORKSPACE=%r names no workspace: with auth on it is refused, "
+                            "and requests that name no workspace act in each caller's home "
+                            "workspace instead. Create it (POST /workspaces) or unset "
+                            "CAIRN_WORKSPACE.", _implicit_ws)
+                except Exception as e:  # noqa: BLE001 — a store hiccup must not stop the boot
+                    logger.warning("could not check CAIRN_WORKSPACE at startup (%s)", type(e).__name__)
         from contextlib import AsyncExitStack
         _stack = AsyncExitStack()
         for _sub_lifespan in _router_lifespans:
