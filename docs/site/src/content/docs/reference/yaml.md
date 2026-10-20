@@ -178,7 +178,13 @@ runs in the server's default workspace. The `X-Cairn-Workspace` header does not
 change this, and a signed request without a token ignores it. A caller with a
 token must belong to the receiver's workspace, or the receiver answers `404`.
 With the durable trigger inbox on (`CAIRN_TRIGGER_DURABLE`), a queued delivery
-keeps its receiver's workspace, and so does a replayed one. `GET /triggers/inbox`
+keeps its receiver's workspace, and so does a replayed one. A queued delivery
+starts its pipeline the way an inline one does: policy gates, admission and the
+pipeline and run records apply. A delivery the launch refuses (a policy `deny`,
+a ref that names no pipeline) is retried and then dead-lettered; it never runs.
+A delivery is done once its pipeline is launched: a leg that fails later is the
+pipeline's to retry, not the inbox's.
+`GET /triggers/inbox`
 lists only the caller's workspace's deliveries (one with no workspace belongs to
 `default`). `POST /triggers/inbox/replay` needs an owner or admin and replays only
 the caller's workspace; only the deployment's admin (`CAIRN_API_USER`) replays

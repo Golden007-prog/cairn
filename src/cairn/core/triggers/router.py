@@ -431,6 +431,19 @@ class TriggerRouter:
         pack/overlay receiver (the process default applies) — #209."""
         return self._workspace_by_path.get(spec.ingress.path) or None
 
+    async def start_queued(self, template_ref: str, input_data: dict[str, Any]) -> Any:
+        """Start a delivery the durable inbox queued, through the door this router
+        holds: the one launch door the server wires (``unattended_starter``), the
+        same call an inline delivery makes in :meth:`route`. The caller binds the
+        record's workspace. A refusal raises, so the drain retries or dead-letters
+        the record. With no door wired (a bare router), the in-process fallback,
+        as :meth:`route` does."""
+        if self._run_template is not None:
+            return await self._run_template(
+                template_ref, input_data, environment=self._run_environment,
+            )
+        return await start_template_run(template_ref, input_data)
+
     def provider_for(self, spec: TriggerSpec) -> TriggerProvider:
         """A registered vendor provider for the source, else the generic
         YAML-driven one bound to this spec."""
