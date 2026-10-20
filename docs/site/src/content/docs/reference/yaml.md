@@ -180,9 +180,14 @@ token must belong to the receiver's workspace, or the receiver answers `404`.
 With the durable trigger inbox on (`CAIRN_TRIGGER_DURABLE`), a queued delivery
 keeps its receiver's workspace, and so does a replayed one.
 
-A receiver path belongs to one workspace. If pipelines in two workspaces declare
-a webhook at the same path, the server mounts no receiver at that path and logs
-an error naming the workspaces; give each workspace's webhook its own `path`.
+A webhook declared by a pipeline belongs to the workspace that enabled it first.
+Enabling a pipeline in a second workspace does not arm a webhook whose path, or
+whose trigger record, another workspace already holds: that workspace keeps it,
+and the server logs an error naming the path and both workspaces. Give the second
+workspace's webhook its own `path`. If records from two workspaces still reach the
+server at one path, it mounts no receiver there and logs the same kind of error.
+One exception: a webhook enabled in any workspace still replaces a receiver shipped
+as a pack or overlay file at the same path.
 
 The Gmail preset is the one this affects in practice: Google's Pub/Sub push authenticates with
 its own OIDC token in `Authorization`, which is not a cairn token, so on a deployment with

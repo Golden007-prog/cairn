@@ -75,6 +75,31 @@ class StoredTrigger(BaseModel):
             object.__setattr__(self, "id", _slug(self.name))
 
 
+class TriggerOwnedByAnotherWorkspace(ValueError):
+    """A write would take over another workspace's trigger row (#213).
+
+    Ids and names are unique across the whole store, not per workspace, and every
+    backend's ``create`` is an upsert: a row written for workspace B with an id or
+    name that A's row already holds used to REPLACE A's row and move it to B, so B
+    captured A's receiver. ``create`` refuses that instead; a caller answering an
+    HTTP request maps this to 409."""
+
+    def __init__(self, trigger_id: str, name: str, owner: str, workspace_id: str) -> None:
+        self.trigger_id, self.name, self.owner, self.workspace_id = trigger_id, name, owner, workspace_id
+        super().__init__(
+            f"trigger {name!r} (id {trigger_id!r}) already exists in workspace {owner!r}; "
+            f"workspace {workspace_id!r} cannot create or replace it — give it another name"
+        )
+
+
+def _claim_conflict(rows: "list[tuple[str, str, str]]", t: "StoredTrigger") -> None:
+    """Raise when any existing ``(id, name, workspace_id)`` row with ``t``'s id or
+    name belongs to another workspace (#213)."""
+    for rid, name, ws in rows:
+        if (rid == t.id or name == t.name) and ws != t.workspace_id:
+            raise TriggerOwnedByAnotherWorkspace(t.id, t.name, ws, t.workspace_id)
+
+
 class InMemoryTriggerStore:
     """Volatile store (tests / no-config default)."""
 
@@ -82,6 +107,7 @@ class InMemoryTriggerStore:
         self._by_id: dict[str, StoredTrigger] = {}
 
     async def create(self, t: StoredTrigger) -> StoredTrigger:
+        _claim_conflict([(r.id, r.name, r.workspace_id) for r in self._by_id.values()], t)
         self._by_id[t.id] = t
         return t
 
@@ -167,6 +193,11 @@ class SqliteTriggerStore:
         self._lock = asyncio.Lock()
 
     def _create_sync(self, t: StoredTrigger) -> None:
+        # #213 — INSERT OR REPLACE drops any row holding this id OR name, whatever
+        # its workspace; refuse when that row is another workspace's.
+        _claim_conflict(self._conn.execute(
+            "SELECT id, name, workspace_id FROM triggers WHERE id=? OR name=?", (t.id, t.name),
+        ).fetchall(), t)
         self._conn.execute(
             "INSERT OR REPLACE INTO triggers (id, name, source, workspace_id, data) VALUES (?,?,?,?,?)",
             (t.id, t.name, t.source, t.workspace_id, t.model_dump_json()),
@@ -254,7 +285,9 @@ _INSERT_TRIGGER_PG_SQL = """
     ON CONFLICT (id) DO UPDATE
     SET name = EXCLUDED.name, source = EXCLUDED.source,
         workspace_id = EXCLUDED.workspace_id, data = EXCLUDED.data
+    WHERE triggers.workspace_id = EXCLUDED.workspace_id
 """
+_SELECT_TRIGGER_PG_CLAIMS = "SELECT id, name, workspace_id FROM triggers WHERE id = $1 OR name = $2"
 _SELECT_TRIGGER_PG_BY_ID = "SELECT data::text FROM triggers WHERE id = $1"
 _SELECT_TRIGGER_PG_BY_ID_WS = "SELECT data::text FROM triggers WHERE id = $1 AND workspace_id = $2"
 _SELECT_TRIGGER_PG_BY_NAME = "SELECT data::text FROM triggers WHERE name = $1"
@@ -306,9 +339,15 @@ class PostgresTriggerStore(PgSchemaInit):
     async def create(self, t: StoredTrigger) -> StoredTrigger:
         pool = await self._get_pool()
         async with pool.acquire() as c:
-            await c.execute(
+            # #213 — never take over another workspace's row; the WHERE on the
+            # upsert keeps that true even if a row lands between the two statements.
+            rows = await c.fetch(_SELECT_TRIGGER_PG_CLAIMS, t.id, t.name)
+            _claim_conflict([(r["id"], r["name"], r["workspace_id"]) for r in rows], t)
+            status = await c.execute(
                 _INSERT_TRIGGER_PG_SQL, t.id, t.name, t.source, t.workspace_id, t.model_dump_json()
             )
+            if status.split()[-1] == "0":  # the upsert's WHERE refused the update
+                raise TriggerOwnedByAnotherWorkspace(t.id, t.name, "another workspace", t.workspace_id)
         return t
 
     async def get(self, trigger_id: str, workspace_id: Optional[str] = None) -> Optional[StoredTrigger]:

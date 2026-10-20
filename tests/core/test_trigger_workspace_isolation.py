@@ -9,9 +9,12 @@ Two ways a receiver's runs could land in a workspace that did not declare it:
   run to it (a replayed record keeps it too).
 * **Two workspaces, one path (#213).** Receivers are keyed by ingress path, so two
   workspaces declaring a receiver at the same path collapsed to one, the last row
-  loaded, and one workspace's sender started runs in the other's. Such a path is
-  now refused at load with an error naming the workspaces: no receiver is mounted
-  there until one of them moves.
+  loaded, and one workspace's sender started runs in the other's. Worse, trigger ids
+  and names are global and every store's ``create`` is an upsert, so enabling the
+  SAME pipeline in a second workspace replaced the first workspace's row and moved
+  it. The write path now refuses a row whose id, name or ingress path belongs to
+  another workspace (the store raises, materialisation skips and logs), and a path
+  that still reaches the router from two workspaces is refused at load.
 
 Driven through the real app (``build_app``) with auth on.
 """
@@ -33,7 +36,10 @@ from fastapi.testclient import TestClient
 from cairn.core.engine.runner import Runner
 from cairn.core.storage import trigger_inbox as inbox_mod
 from cairn.core.storage.trigger_inbox import SqliteTriggerInbox, drain_once
-from cairn.core.storage.trigger_store import StoredTrigger
+from cairn.core.engine.triggers_grammar import WebhookTrigger, materialise_declared_triggers
+from cairn.core.storage.schedule_store import InMemoryScheduleStore
+from cairn.core.storage import trigger_store as trigger_store_mod
+from cairn.core.storage.trigger_store import InMemoryTriggerStore, SqliteTriggerStore, StoredTrigger
 from cairn.core.triggers import auth
 from cairn.core.triggers import router as router_mod
 from cairn.core.triggers.router import TriggerRouter
@@ -242,3 +248,88 @@ def test_the_same_workspace_declaring_a_path_twice_is_unchanged(env, stored, sta
     r = c.post("/triggers/acme", content=BODY, headers=_sig())
     assert r.status_code == 200, (r.status_code, r.text)
     assert started.calls == [("pipeline:p/x", "acme-ops")]
+
+
+# ─── #213 at the write path: the same pipeline enabled in two workspaces ────
+
+REF = "pipeline:shared/p"
+
+
+def _materialise(store, ws: str):
+    return asyncio.run(materialise_declared_triggers(
+        REF, [WebhookTrigger(kind="webhook", source="github")], workspace_id=ws,
+        trigger_store=store, schedule_store=InMemoryScheduleStore()))
+
+
+def test_enabling_the_same_webhook_in_a_second_workspace_does_not_take_the_first_ones(
+        env, monkeypatch, tmp_path, started, caplog):
+    """The real sqlite store and the real materialise/converge path: ids and names are
+    global, so B's write used to REPLACE A's row and move it to B — one row, no
+    collision left for the router to see, and A's sender started runs in B."""
+    db = str(tmp_path / "triggers.db")
+    monkeypatch.setenv("CAIRN_TRIGGERS_DB", db)
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
+    monkeypatch.setattr(router_mod, "load_trigger_specs", lambda *_a, **_k: [])
+    store = SqliteTriggerStore(db)
+    a = _materialise(store, "acme-ops")
+    assert len(a.created) == 1, a
+    with caplog.at_level(logging.ERROR):
+        b = _materialise(store, "globex")
+    assert b.created == [] and b.updated == [] and len(b.unarmed) == 1, b
+    msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any("/triggers/github" in m and "acme-ops" in m and "globex" in m for m in msgs), msgs
+    rows = store.list_sync()
+    assert [(r.id, r.workspace_id) for r in rows] == [(a.created[0], "acme-ops")]
+    store.close()
+
+    router = TriggerRouter.from_installed()
+    assert router.workspace_for(router.spec_for_path("/triggers/github")) == "acme-ops"
+    c = TestClient(build_app(Runner(), enable_scheduler=False))
+    sig = "sha256=" + hmac.new(SECRET.encode(), BODY, hashlib.sha256).hexdigest()
+    r = c.post("/triggers/github", content=BODY,
+               headers={"X-Hub-Signature-256": sig, "content-type": "application/json",
+                        "X-Cairn-Workspace": "globex"})
+    assert r.status_code == 200, (r.status_code, r.text)
+    assert [ws for _ref, ws in started.calls] == ["acme-ops"]
+
+
+def test_re_enabling_in_the_owning_workspace_is_unchanged(tmp_path):
+    store = SqliteTriggerStore(str(tmp_path / "triggers.db"))
+    first = _materialise(store, "acme-ops")
+    again = _materialise(store, "acme-ops")
+    assert len(first.created) == 1 and again.unchanged == first.created and again.unarmed == []
+    store.close()
+
+
+def test_another_pipeline_at_a_path_another_workspace_holds_is_not_armed(tmp_path):
+    """A different id and name, the same ingress path: refused at the write too."""
+    store = SqliteTriggerStore(str(tmp_path / "triggers.db"))
+    _materialise(store, "acme-ops")
+    other = asyncio.run(materialise_declared_triggers(
+        "pipeline:other/q", [WebhookTrigger(kind="webhook", source="github")],
+        workspace_id="globex", trigger_store=store, schedule_store=InMemoryScheduleStore()))
+    assert other.created == [] and len(other.unarmed) == 1, other
+    assert "/triggers/github" in other.unarmed[0] and "acme-ops" in other.unarmed[0]
+    assert {r.workspace_id for r in store.list_sync()} == {"acme-ops"}
+    store.close()
+
+
+@pytest.mark.parametrize("make", [lambda p: SqliteTriggerStore(str(p / "t.db")),
+                                  lambda p: InMemoryTriggerStore()])
+def test_the_store_refuses_a_row_another_workspace_owns(tmp_path, make):
+    """Every writer (the console's create route included) goes through ``create``:
+    a cross-workspace id or name raises instead of replacing the row."""
+    store = make(tmp_path)
+    mine = StoredTrigger(id="hook", workspace_id="acme-ops", name="hook", source="custom",
+                         yaml=_spec_text("/triggers/hook"))
+    asyncio.run(store.create(mine))
+    for clash in (mine.model_copy(update={"workspace_id": "globex"}),
+                  mine.model_copy(update={"workspace_id": "globex", "id": "other-id"})):
+        with pytest.raises(getattr(trigger_store_mod, "TriggerOwnedByAnotherWorkspace", ValueError),
+                           match="acme-ops"):
+            asyncio.run(store.create(clash))
+    # the owner may still update its own row (create is the upsert _converge uses)
+    asyncio.run(store.create(mine.model_copy(update={"description": "edited"})))
+    rows = store.list_sync()
+    assert [(r.id, r.workspace_id, r.description) for r in rows] == [("hook", "acme-ops", "edited")]
+    store.close()

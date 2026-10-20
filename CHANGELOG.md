@@ -5,8 +5,8 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 
 ### Security
-- With the durable trigger inbox on (`CAIRN_TRIGGER_DURABLE`), a queued webhook delivery keeps the workspace of the receiver that matched it, and its run starts there; it started in the default workspace. A replayed delivery keeps it too. Deliveries queued by an older server still start in the default workspace.
-- A webhook path declared in two workspaces is refused when the server loads its receivers: no receiver is mounted at that path and the server logs an error naming the workspaces. Before, the last one loaded took the path, so one workspace's sender could start runs in the other's.
+- With the durable trigger inbox on (`CAIRN_TRIGGER_DURABLE`), a queued webhook delivery keeps the workspace of the receiver that matched it, and its run starts there; it started in the default workspace. A replayed delivery keeps it too. Deliveries queued by an older server still start in the default workspace, and so does a delivery that a consumer on an older version takes from a shared NATS inbox (it ignores the new field).
+- A workspace can no longer take another workspace's webhook. Enabling the same pipeline in a second workspace used to replace the first workspace's trigger record and move it, because trigger ids and names are global. Now a declared webhook whose path, id or name another workspace already holds is not armed, and the server logs an error naming the path and both workspaces. The trigger store refuses such a write (`TriggerOwnedByAnotherWorkspace`) from any caller. If records from two workspaces still reach the server at one path, no receiver is mounted there. A workspace's webhook still replaces a pack or overlay receiver at the same path.
 
 ## [0.1.3]
 
