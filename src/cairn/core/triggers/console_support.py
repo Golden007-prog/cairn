@@ -20,13 +20,17 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
 import tomlkit  # comment-preserving TOML read/write for the profile form (base dep)
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException
 
 from cairn.core.profile_backends import get_field  # Environment backends configurator (#303)
-from cairn.core.triggers.auth import caller_identity, identity_from_claims  # account-scope the API (#392 p2)
+from cairn.core.triggers.auth import (  # account-scope the API (#392 p2)
+    _oauth2_scheme,
+    caller_identity,
+    identity_from_claims,
+)
 
 
 # ── profiles: edit the shipped execution profiles (cairn/profiles/*.toml) ──
@@ -341,3 +345,25 @@ async def assert_can_write_workspace(token: Optional[str]) -> str:
     except WorkspaceForbidden:
         raise HTTPException(status_code=403, detail=f"not a member of workspace {ws!r}") from None
     return ws
+
+
+async def writable_workspace(
+    token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
+) -> str:
+    """FastAPI dependency: the workspace this request writes in, once the caller
+    may write there — :func:`assert_can_write_workspace` at the route (403 when
+    the caller's account does not own it).
+
+    Every route that writes a workspace-scoped record or starts work carries it
+    (``dependencies=[Depends(writable_workspace)]``, or a parameter when the
+    handler needs the id). ``_WorkspaceMiddleware`` stays the primary check;
+    this re-asserts it where the write happens, so a future gap in the
+    middleware (#220 was one) does not silently become a write path.
+    ``tests/core/test_write_route_workspace_guard.py`` fails a new write route
+    that carries neither this nor a stated exemption. Auth off answers exactly
+    as :func:`assert_can_write_workspace` does for ``POST /start`` today: the
+    caller is the implicit ``default`` account, which owns every workspace a
+    keyless deployment creates.
+    """
+    return await assert_can_write_workspace(token)
+

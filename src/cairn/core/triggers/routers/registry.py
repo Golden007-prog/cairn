@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from cairn.core.refs import ref_key  # ONE ref spelling (#2126)
+from cairn.core.triggers import console_support as support
 from cairn.core.triggers.auth import require_auth
 from cairn.core.triggers.routers.pipelines import _off_loop  # #2317 listing helper
 
@@ -156,7 +157,7 @@ def build_registry_router() -> APIRouter:
             out.append(d)
         return out
 
-    @r.post("/registry/sync-workflows", dependencies=[Depends(require_auth)])
+    @r.post("/registry/sync-workflows", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
     async def sync_workflows() -> dict[str, Any]:
         """Populate the installed-workflow registry from discovered templates
         (#225, ADR-0049 — populate-on-discovery): the DB becomes the system of
@@ -166,7 +167,7 @@ def build_registry_router() -> APIRouter:
         from cairn.core.workspace import current_workspace
         return {"synced": await sync_discovered_workflows(workspace_id=current_workspace())}
 
-    @r.post("/registry/enable", dependencies=[Depends(require_auth)])
+    @r.post("/registry/enable", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
     async def registry_enable(body: InstallRequest) -> dict[str, Any]:
         """Enable one discovered workflow into the current workspace (#258): record
         its provenance so it becomes runnable here, without auto-inheriting the rest
@@ -180,7 +181,7 @@ def build_registry_router() -> APIRouter:
             raise HTTPException(status_code=404, detail=f"workflow {body.ref!r} not found / not enableable")
         return {"enabled": body.ref.strip(), "workspace_id": ws}
 
-    @r.post("/registry/disable", dependencies=[Depends(require_auth)])
+    @r.post("/registry/disable", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
     async def registry_disable(body: InstallRequest) -> dict[str, Any]:
         """Disable one workflow in the current workspace — the inverse of
         ``/registry/enable``. Soft: flips the workflow's record to ``disabled`` so it

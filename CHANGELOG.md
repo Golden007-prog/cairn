@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Security
+- Every route that writes a workspace's records or starts work checks, at the route, that the caller may write in the workspace it acts in, and answers `403` ("not a member of workspace …") when the caller's account does not own it. Only `POST /start`, the workspace variable writes and `POST /triggers/inbox/replay` checked this before; every other write relied on the workspace middleware alone, so a gap there (like the one 0.1.4 closed for requests that name no workspace) would have let a caller write into another account's workspace. Now checked too: `POST /pipelines/launch`, saving and deleting launch presets, advancing, approving and cancelling a pipeline, creating, changing and deleting schedules, `POST /registry/sync-workflows|enable|disable`, `POST /packs/{pack}/{template}/run`, resuming, cancelling, expiring and sending control to a run, `POST /approvals/dismiss`, `POST /triggers/alert|pattern|manual` and `POST /triggers/approve/{workflow_id}`. The middleware still answers first (`404` for a workspace the caller's account does not own), so a caller it lets through is unchanged. With auth off, a workspace that another account owns (one created while auth was on) now refuses these writes with `403`, as `POST /start` already did; workspaces created with auth off belong to the default account and are unchanged. Account-level routes (`/auth/*`, `/workspaces`), worker routes (`/runs/{id}/events/ingest`, `/jobs/*`), signed webhook receivers and side-effect-free previews are not affected.
+
 ## [0.1.4] - 2026-10-21
 
 ### Security
