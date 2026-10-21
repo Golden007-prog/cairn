@@ -95,7 +95,7 @@ steps:
     }
 
 
-def test_nested_step_field_literal_is_not_rewritten():
+def test_a_nested_bare_step_field_is_refused_not_rewritten():
     with pytest.raises(PipelineDefError, match=r"ambiguous nested value.*\$steps\.train\.jsonl"):
         _plan("""
 name: nested
@@ -127,3 +127,39 @@ steps:
 
     consumer = next(step for step in plan.steps if step.id == "consumer")
     assert consumer.inputs["value"] == "$steps.source.output"
+
+
+# ─── loop bodies (#128 follow-up) ────────────────────────────────────────────
+# Loop bodies are lowered twice: by `plan_pipeline` for iteration 1, and by the
+# bridge's loop-append path (`lower_step`) for iterations 2..N. The nested rules
+# hold for both: an explicit nested wire plans, a bare one is refused when the
+# pipeline is planned, so it can never reach the loop-append path.
+
+_LOOP = """
+name: nested
+kind: pipeline
+steps:
+  - id: seed
+    task: nested/echo
+  - loop: cyc
+    depends_on: [seed]
+    steps:
+      - id: work
+        task: nested/echo
+        with:
+          options:
+            sources: [{inner}]
+    until: "work.done == true"
+    max_iterations: 2
+"""
+
+
+def test_an_explicit_nested_wire_in_a_loop_body_plans():
+    plan = _plan(_LOOP.format(inner='"$steps.seed.out"'))
+    work = next(step for step in plan.steps if step.id == "work")
+    assert work.inputs["options"] == {"sources": ["$steps.seed.out"]}
+
+
+def test_a_bare_nested_wire_in_a_loop_body_is_refused_at_plan_time():
+    with pytest.raises(PipelineDefError, match=r"ambiguous nested value.*\$steps\.seed\.out"):
+        _plan(_LOOP.format(inner='"seed.out"'))
