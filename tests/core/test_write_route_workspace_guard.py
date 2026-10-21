@@ -48,7 +48,6 @@ VICTIM_WS, INTRUDER_WS = "acme-ops", "initech-ops"
 ACME_RUN, ACME_PIPE = "run-acme-1", "pipe-acme-1"
 DEFAULT_RUN = "run-default-1"  # a run a default-account worker reports
 OWNER, INTRUDER = "bob@acme.com", "carl@initech.com"
-GUARDS = (support.writable_workspace, support.writable_workspace_unless_worker)
 EVENTS = {"events": [{"type": "metrics", "data": {"node": "train", "seq": 1, "step": 1,
                                                   "series": {"loss": 1.0}}}]}
 
@@ -305,7 +304,8 @@ def _calls(dependant) -> set:
 
 
 def _guarded(route: APIRoute) -> bool:
-    return any(g in _calls(route.dependant) for g in GUARDS)
+    guards = (support.writable_workspace, support.writable_workspace_unless_worker)
+    return any(g in _calls(route.dependant) for g in guards)
 
 
 def _app():
