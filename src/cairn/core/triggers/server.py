@@ -414,12 +414,13 @@ _NO_WORKSPACE = "~no-workspace"
 
 
 def _account_level_route(method: str, path: str) -> bool:
-    """The routes an account with no active workspace may still call (#220): sign-in
-    and identity (``/auth/*``), listing and creating its workspaces (``/workspaces``),
+    """The routes an account with no active workspace may still call (#220): who am I
+    (``/auth/me``; the other ``/auth/*`` routes are public and never get here), listing
+    and creating its workspaces (``/workspaces``),
     archiving or restoring one (``/workspaces/{id}``, which checks ownership itself,
     #157), and the operator report list. None of them writes a workspace-scoped
     record; everything else needs a workspace and answers 404 without one."""
-    if path.startswith("/auth/") or path == "/workspaces":
+    if path in ("/auth/me", "/workspaces"):
         return True
     if path == "/operators/reports":
         return method == "GET"
