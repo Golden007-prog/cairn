@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from cairn.core.triggers import console_support as support
 from cairn.core.triggers.auth import require_auth
 from cairn.core.workspace import current_workspace
 
@@ -65,7 +66,7 @@ def build_templates_router(dispatcher=None) -> APIRouter:
             raise HTTPException(status_code=404, detail=f"template not found: {ref}")
         return contract.model_dump(mode="json")
 
-    @r.post("/packs/{pack}/{template}/run")
+    @r.post("/packs/{pack}/{template}/run", dependencies=[Depends(support.writable_workspace)])
     async def pack_run(
         pack: str, template: str, values: dict[str, Any],
         profile: Optional[str] = None, config_preset: Optional[str] = None,
