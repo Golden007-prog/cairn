@@ -298,6 +298,20 @@ async def account_from_claims(claims: dict[str, Any]) -> str:
     return str(ident.get("account_id") or "default")
 
 
+async def home_workspace(account_id: Optional[str]) -> str:
+    """The workspace a returning sign-in lands in: the account's oldest active
+    one. ``""`` lets the console fall back to the one it remembers.
+
+    Also where ``_WorkspaceMiddleware`` sends a request that names no workspace
+    when the caller's account does not own the implicit one (#220)."""
+    from cairn.core.workspace import DEFAULT_ACCOUNT, get_workspace_store  # noqa: PLC0415
+    if not account_id:
+        return ""
+    mine = [w for w in await get_workspace_store().list()
+            if (w.account_id or DEFAULT_ACCOUNT) == account_id and w.status != "archived"]
+    return min(mine, key=lambda w: w.created_at).id if mine else ""
+
+
 async def assert_can_write_workspace(token: Optional[str]) -> str:
     """The workspace a write lands in, once the caller is allowed to act in it.
 

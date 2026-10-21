@@ -98,10 +98,17 @@ A request acts in a workspace when its path starts with
 sign-in on, naming a workspace that does not exist answers `404`, the same as
 naming one another account owns; create it first (`POST /workspaces`). So
 `CAIRN_WORKSPACE`, if set, must name a workspace that exists (`default` always
-does). On a multi-node deployment the workspace store must be shared (Postgres):
-each node's SQLite store only knows the workspaces created on it. The
-engine installs every pipeline it finds into the `default` workspace when it
-starts.
+does); the server warns at startup when it does not. On a multi-node deployment
+the workspace store must be shared (Postgres): each node's SQLite store only
+knows the workspaces created on it.
+
+A request that names neither acts in the server's default workspace
+(`CAIRN_WORKSPACE`, else `default`) if your account owns it, and otherwise in
+your account's oldest active workspace, the one sign-in opens; a
+`CAIRN_WORKSPACE` that does not exist sends every such request there. An
+account with no active workspace gets `404` on every workspace-scoped route,
+but can still sign in, list, create and restore its workspaces. The engine installs every
+pipeline it finds into the `default` workspace when it starts.
 
 ## 6. Roles, and who decides a gate
 

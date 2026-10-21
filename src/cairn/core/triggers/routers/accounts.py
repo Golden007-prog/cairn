@@ -90,17 +90,6 @@ async def _provision_first_workspace(acct: Any, company: str, *, actor: str, sou
     return ws_id
 
 
-async def _home_workspace(account_id: Optional[str]) -> str:
-    """The workspace a returning sign-in lands in: the account's oldest active
-    one. ``""`` lets the console fall back to the one it remembers."""
-    from cairn.core.workspace import DEFAULT_ACCOUNT, get_workspace_store  # noqa: PLC0415
-    if not account_id:
-        return ""
-    mine = [w for w in await get_workspace_store().list()
-            if (w.account_id or DEFAULT_ACCOUNT) == account_id and w.status != "archived"]
-    return min(mine, key=lambda w: w.created_at).id if mine else ""
-
-
 async def _owned_workspace_or_404(workspace_id: str, admin: Optional[str],
                                   token: Optional[str]) -> Any:
     """The workspace row an archive/restore acts on, once the caller may manage
@@ -477,7 +466,7 @@ def build_accounts_router() -> APIRouter:
                 acct = await get_account_store().get_account(out.account_id)
                 ws_id = await _provision_first_workspace(acct, "", actor=out.user.id, source="oauth")
             else:
-                ws_id = await _home_workspace(out.account_id)
+                ws_id = await support.home_workspace(out.account_id)
             claims: dict[str, Any] = {"sub": out.user.id}
             if out.account_id:
                 claims["account_id"] = out.account_id
