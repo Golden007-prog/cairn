@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- `cairn.core.dataflow.fidelity`: the deterministic, recorded subsample a flow stage takes (`Fidelity`, `plan`, `row_hash`, `digest_rows`). The kept rows depend only on the corpus, the seed and the row count, never on row or key order, and the digest records which rows were kept, so two runs on the same subsample are provably comparable. Operator packs that sample (training, dataset checks) import it from here instead of carrying their own copy.
+
 ## [0.1.4] - 2026-10-21
 
 ### Security
