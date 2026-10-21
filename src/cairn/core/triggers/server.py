@@ -407,10 +407,24 @@ class ResumeRequest(BaseModel):
 
 #: #220 — where an authenticated request acts when it names no workspace and its
 #: account has no active one: an id no workspace can have (``~`` never survives
-#: :func:`_slug_workspace_id`) and so no store row. Reads find nothing, and every
-#: write is refused (#156: with auth on, a workspace with no row is refused), while
-#: the account-level routes — list, create, restore — still answer.
+#: :func:`_slug_workspace_id`) and so no store row. Only the account-level routes
+#: (:func:`_account_level_route`) are served there; every other route answers 404,
+#: so no record is ever written under it.
 _NO_WORKSPACE = "~no-workspace"
+
+
+def _account_level_route(method: str, path: str) -> bool:
+    """The routes an account with no active workspace may still call (#220): sign-in
+    and identity (``/auth/*``), listing and creating its workspaces (``/workspaces``),
+    archiving or restoring one (``/workspaces/{id}``, which checks ownership itself,
+    #157), and the operator report list. None of them writes a workspace-scoped
+    record; everything else needs a workspace and answers 404 without one."""
+    if path.startswith("/auth/") or path == "/workspaces":
+        return True
+    if path == "/operators/reports":
+        return method == "GET"
+    rest = path[len("/workspaces/"):] if path.startswith("/workspaces/") else None
+    return bool(rest) and "/" not in rest.strip("/") and method in ("PATCH", "DELETE", "GET")
 
 
 def _slug_workspace_id(raw: str) -> str:
@@ -534,6 +548,9 @@ class _WorkspaceMiddleware:
                              type(e).__name__)
                 await self._unavailable(send)
                 return
+            if ws == _NO_WORKSPACE and not _account_level_route(scope.get("method", ""), scope.get("path", "")):
+                await self._not_found(send)
+                return
 
         token = set_current_workspace(ws)
         try:
@@ -547,8 +564,8 @@ class _WorkspaceMiddleware:
 
         The implicit workspace (``CAIRN_WORKSPACE``, else ``default``) when the
         caller's account owns it; otherwise the account's home workspace;
-        ``_NO_WORKSPACE`` when the account has no active one (nothing to read, no
-        write admitted, account-level routes still answer). With auth on,
+        ``_NO_WORKSPACE`` when the account has no active one, where only the
+        account-level routes answer (the caller 404s everything else). With auth on,
         ``assert_workspace_allowed`` refuses a workspace with no row (#156), so
         a ``CAIRN_WORKSPACE`` that names none (a misconfiguration, warned about
         at startup) sends every caller to their home workspace."""

@@ -90,7 +90,8 @@ def env(monkeypatch, tmp_path):
         for name, acct in (("bob@acme.com", "acme"), ("dana", A.DEFAULT_ACCOUNT),
                            ("carl@initech.com", "initech"), ("uma@umbrella.com", "umbrella")):
             u = await A.create_user(name, f"{name}-password", store=accounts)
-            await A.add_member(acct, u.id, "member", store=accounts)
+            await A.add_member(acct, u.id, "admin" if name == "uma@umbrella.com" else "member",
+                               store=accounts)
             ids[name] = (u.id, acct)
         return ids
     users = asyncio.run(_seed())
@@ -146,17 +147,33 @@ def test_the_request_reports_the_home_workspace_as_current(env):
     assert r.json()["current"] == "acme-ops"
 
 
-def test_an_account_with_no_workspace_reads_nothing_and_writes_nothing(env):
-    """No active workspace: the request acts in none. It reads nothing (never
-    `default`), cannot write, and can still create its first workspace."""
+def test_an_account_with_no_workspace_gets_404_but_can_create_one(env):
+    """No active workspace: every workspace-scoped route answers 404 (never
+    `default`); the account-level routes answer, so it can create its first."""
+    h = env.headers("carl@initech.com")
     with env.client() as c:
-        r = c.get("/runs", headers=env.headers("carl@initech.com"))
-        assert r.status_code == 200, (r.status_code, r.text)
-        assert _run_ids(r) == set() and DEFAULT_RUN not in r.text
-        w = c.put("/variables/K", json={"value": "v"}, headers=env.headers("carl@initech.com"))
-        assert w.status_code == 403, (w.status_code, w.text)
-        created = c.post("/workspaces", json={"name": "Initech"}, headers=env.headers("carl@initech.com"))
+        r = c.get("/runs", headers=h)
+        assert r.status_code == 404 and DEFAULT_RUN not in r.text, (r.status_code, r.text)
+        for method, path, body in (("PUT", "/variables/K", {"value": "v"}),
+                                   ("POST", "/triggers/manual", {"template": "x", "input": {}}),
+                                   ("POST", "/pipelines/launch", {"ref": "x"}),
+                                   ("POST", "/schedules", {"name": "s", "cron": "* * * * *", "template": "x"})):
+            w = c.request(method, path, json=body, headers=h)
+            assert w.status_code == 404, (method, path, w.status_code, w.text)
+        assert c.get("/workspaces", headers=h).status_code == 200
+        assert c.get("/auth/me", headers=h).status_code == 200
+        created = c.post("/workspaces", json={"name": "Initech"}, headers=h)
     assert created.status_code == 200, (created.status_code, created.text)
+
+
+def test_two_accounts_with_no_workspace_share_nothing(env):
+    """The no-workspace id is one value for every such account, so nothing may be
+    written under it: A's trigger is refused, and B sees no run of A's."""
+    with env.client() as c:
+        a = c.post("/triggers/manual", json={"template": "x", "input": {}}, headers=env.headers("carl@initech.com"))
+        b = c.get("/runs", headers=env.headers("uma@umbrella.com"))
+    assert a.status_code == 404, (a.status_code, a.text)
+    assert b.status_code == 404, (b.status_code, b.text)
 
 
 def test_cairn_workspace_is_authorized_like_the_default(env, monkeypatch):
@@ -228,12 +245,18 @@ def test_an_existing_cairn_workspace_is_not_warned_about(env, monkeypatch, caplo
     assert not [r for r in caplog.records if "names no workspace" in r.getMessage()]
 
 
-def test_an_account_whose_only_workspace_is_archived_reads_nothing(env):
+def test_an_account_whose_only_workspace_is_archived_can_still_restore_it(env):
+    h = env.headers("uma@umbrella.com")
     with env.client() as c:
-        r = c.get("/runs", headers=env.headers("uma@umbrella.com"))
-        listed = c.get("/workspaces", params={"include_archived": "true"}, headers=env.headers("uma@umbrella.com"))
-    assert r.status_code == 200 and _run_ids(r) == set() and DEFAULT_RUN not in r.text, (r.status_code, r.text)
-    assert listed.status_code == 200, (listed.status_code, listed.text)
+        r = c.get("/runs", headers=h)
+        assert r.status_code == 404 and DEFAULT_RUN not in r.text, (r.status_code, r.text)
+        listed = c.get("/workspaces", params={"include_archived": "true"}, headers=h)
+        assert listed.status_code == 200, (listed.status_code, listed.text)
+        archived = [w["id"] for w in listed.json().get("workspaces", []) if w.get("status") == "archived"]
+        assert archived, listed.text
+        restored = c.patch(f"/workspaces/{archived[0]}", json={"status": "active"}, headers=h)
+    assert restored.status_code == 200, (restored.status_code, restored.text)
+    assert restored.json().get("status") == "active", restored.text
 
 
 def test_a_headerless_start_launches_in_the_home_workspace_never_default(env, monkeypatch):
