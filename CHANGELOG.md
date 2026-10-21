@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-21
+
 ### Security
 - The auth guard decides on the request path the router serves (`scope['path']`), not on `request.url.path`, which is rebuilt from the Host header and cut at a decoded `?` or `#`. A request to a protected route that names a public path that way now answers 401. The base dependencies require `starlette>=1.0.1`, the first release that ignores a malformed Host header when it builds `request.url`.
 - A webhook signature header with non-ASCII characters is refused with 401; it answered 500.
