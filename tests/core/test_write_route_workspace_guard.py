@@ -274,7 +274,7 @@ EXEMPT: dict[tuple[str, str], str] = {
         "account-level: archives one; needs an admin of the owning account (#157)",
     ("PATCH", "/workspaces/{workspace_id}"):
         "account-level: archives/restores one; needs an admin of the owning account (#157)",
-    # The pull lane is not a workspace route: a job carries no workspace, so there
+    # The pull lane is not a workspace route: these routes act in no workspace and `claim_next` is unscoped, so there
     # is no workspace to assert. Its tenancy (which caller may claim or heartbeat
     # which job) is NOT settled here; that gap is tracked privately as
     # evs-cmd/cairn-platform#224.
