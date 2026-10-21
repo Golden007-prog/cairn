@@ -127,7 +127,8 @@ def build_run_control_router(dispatcher, *, pipeline_bridge=None) -> APIRouter:
     #    control plane's own API — the `http` job channel. The store is the log:
     #    ingest is idempotent on the worker's (node, seq), control is a run event.
 
-    @r.post("/runs/{run_id}/events/ingest", dependencies=[Depends(require_auth)])
+    @r.post("/runs/{run_id}/events/ingest",
+            dependencies=[Depends(require_auth), Depends(support.writable_workspace_unless_worker)])
     async def ingest_run_events(run_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         """Append a batch of a worker's report events — once each, whatever the
         worker replayed after a reconnect. Body: ``{"events": [{"type", "data":

@@ -10,7 +10,10 @@ tenant's workspace.
 Now every route that writes a workspace-scoped record or starts work carries
 ONE dependency, ``console_support.writable_workspace`` (which is
 ``assert_can_write_workspace``: 403 for a caller whose account does not own the
-workspace). The middleware stays the primary check.
+workspace) — or, on the one route a per-run worker token also calls (run event
+ingest), its variant ``writable_workspace_unless_worker``, which leaves the
+worker token to the guard's run scoping (#120) and checks every other caller
+the same way. The middleware stays the primary check.
 
 Driven through the real app (``build_app``) with auth on and real account,
 workspace, run and pipeline stores. The middleware gap is simulated by making
@@ -43,7 +46,11 @@ from cairn.core.triggers import console_support as support
 
 VICTIM_WS, INTRUDER_WS = "acme-ops", "initech-ops"
 ACME_RUN, ACME_PIPE = "run-acme-1", "pipe-acme-1"
+DEFAULT_RUN = "run-default-1"  # a run a default-account worker reports
 OWNER, INTRUDER = "bob@acme.com", "carl@initech.com"
+GUARDS = (support.writable_workspace, support.writable_workspace_unless_worker)
+EVENTS = {"events": [{"type": "metrics", "data": {"node": "train", "seq": 1, "step": 1,
+                                                  "series": {"loss": 1.0}}}]}
 
 
 class _FakeRunner:
@@ -71,6 +78,7 @@ def env(monkeypatch, tmp_path):
         s = SqliteRunStore(str(tmp_path / "r.db"))
         trig = TriggerEvent(source="manual", matched_pattern="p", service="svc")
         await s.create(Run(id=ACME_RUN, trigger=trig, fingerprint=ACME_RUN, workspace_id=VICTIM_WS))
+        await s.create(Run(id=DEFAULT_RUN, trigger=trig, fingerprint=DEFAULT_RUN, workspace_id="default"))
         s.close()
     asyncio.run(_seed_runs())
 
@@ -153,6 +161,7 @@ GUARDED = [
     ("POST", "/packs/x/y/run", {"json": {}}, 400),
     ("POST", f"/runs/{ACME_RUN}/resume", {"json": {"decision": "reject"}}, 409),
     ("POST", f"/runs/{ACME_RUN}/control", {"json": {"action": "abort"}}, 200),
+    ("POST", f"/runs/{ACME_RUN}/events/ingest", {"json": EVENTS}, 200),
     ("POST", f"/runs/{ACME_RUN}/cancel", {}, 200),
     ("POST", f"/runs/{ACME_RUN}/expire", {}, 409),
     ("POST", "/approvals/dismiss", {"json": {"run_ids": [ACME_RUN]}}, 200),
@@ -185,6 +194,28 @@ def test_the_owner_gets_the_routes_own_answer(env, method, path, kw, owner_statu
     assert r.text != '{"detail":"workspace not found"}'
 
 
+def test_a_non_member_is_refused_before_the_body_is_validated(env, middleware_gap):
+    """The check is a dependency, so it answers before body validation: a
+    non-member sending a bad body gets 403, not 422 (on main ``POST /start``
+    checked inside the handler, after the body)."""
+    with env.client() as c:
+        intruder = c.post("/start", json={}, headers=env.headers(INTRUDER, VICTIM_WS))
+        owner = c.post("/start", json={}, headers=env.headers(OWNER, VICTIM_WS))
+    assert intruder.status_code == 403, (intruder.status_code, intruder.text)
+    assert owner.status_code == 422, (owner.status_code, owner.text)
+
+
+def test_a_worker_token_still_ingests_its_own_run(env, middleware_gap):
+    """A per-run worker token belongs to no account's membership; the guard
+    scopes it to its own run (#120), and the ingest route leaves it there."""
+    tok = auth.create_access_token({"sub": f"worker:{DEFAULT_RUN}", "scope": "run-ingest",
+                                    "run_id": DEFAULT_RUN})
+    with env.client() as c:
+        r = c.post(f"/runs/{DEFAULT_RUN}/events/ingest", json=EVENTS,
+                   headers={"Authorization": f"Bearer {tok}"})
+    assert r.status_code == 200 and r.json()["accepted"] == 1, (r.status_code, r.text)
+
+
 def test_without_a_gap_the_middleware_still_answers_first(env):
     """The dependency re-asserts; it does not replace. A named workspace the
     caller's account does not own is still the middleware's 404 (ADR-0051 §4:
@@ -210,6 +241,26 @@ def test_auth_off_a_keyless_workspace_write_is_unchanged(monkeypatch, tmp_path):
     assert r.json()["workspace_id"] == "team"
 
 
+def test_auth_off_another_accounts_workspace_is_refused(monkeypatch, tmp_path):
+    """Keyless dev: the caller is the default account. A workspace another
+    account owns (one created while auth was on) refuses the write with 403, as
+    ``POST /start`` already did (owner decision on #221: one rule)."""
+    for k in ("CAIRN_JWT_SECRET", "OBS_JWT_SECRET", "CAIRN_REQUIRE_AUTH", "OBS_REQUIRE_AUTH",
+              "CAIRN_WORKSPACE", "OBS_WORKSPACE", "OBS_STORAGE", "CAIRN_STORAGE"):
+        monkeypatch.delenv(k, raising=False)
+    workspaces = W.SqliteWorkspaceStore(path=str(tmp_path / "w.db"))
+    monkeypatch.setattr(W, "_store", workspaces)
+    monkeypatch.setattr(WV, "_default_store", WV.InMemoryWorkspaceVariableStore())
+    asyncio.run(workspaces.put(W.Workspace(id=VICTIM_WS, name=VICTIM_WS, account_id="acme")))
+    with TestClient(_app()) as c:
+        var = c.put("/variables/k1", json={"value": "v"}, headers={"X-Cairn-Workspace": VICTIM_WS})
+        dismiss = c.post("/approvals/dismiss", json={"run_ids": []},
+                         headers={"X-Cairn-Workspace": VICTIM_WS})
+    for r in (var, dismiss):
+        assert r.status_code == 403, (r.status_code, r.text)
+        assert r.json()["detail"] == f"not a member of workspace {VICTIM_WS!r}"
+
+
 # ── structural: no write route without the guard or a stated exemption ──────
 
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
@@ -224,12 +275,14 @@ EXEMPT: dict[tuple[str, str], str] = {
         "account-level: archives one; needs an admin of the owning account (#157)",
     ("PATCH", "/workspaces/{workspace_id}"):
         "account-level: archives/restores one; needs an admin of the owning account (#157)",
-    ("POST", "/runs/{run_id}/events/ingest"):
-        "run-scoped worker route: the guard scopes a worker token to its run (#120)",
+    # The pull lane is not a workspace route: a job carries no workspace, so there
+    # is no workspace to assert. Its tenancy (which caller may claim or heartbeat
+    # which job) is NOT settled here; that gap is tracked privately as
+    # evs-cmd/cairn-platform#224.
     ("POST", "/jobs/{job_id}/heartbeat"):
-        "run-scoped worker route: a worker token may heartbeat only its run's job (#120)",
+        "pull lane, not a workspace route; its tenancy gap is tracked as cairn-platform#224",
     ("POST", "/jobs/claim"):
-        "deployment-level pull lane: an operator credential claims queued work across workspaces",
+        "pull lane, not a workspace route; its tenancy gap is tracked as cairn-platform#224",
     ("POST", "/registry/install"):
         "deployment-level and refused by posture (501, #1545 D2): a pack is process-wide",
     ("POST", "/registry/uninstall"):
@@ -251,22 +304,31 @@ def _calls(dependant) -> set:
     return out
 
 
+def _guarded(route: APIRoute) -> bool:
+    return any(g in _calls(route.dependant) for g in GUARDS)
+
+
 def _app():
     from cairn.core.triggers.server import build_app
     return build_app(_FakeRunner(), enable_scheduler=False)
 
 
+#: The handler ``server._mount_trigger_routes`` mounts for each spec-declared
+#: webhook receiver, matched by where it is defined rather than by route name.
+_SPEC_RECEIVER = ("cairn.core.triggers.server", "_mount_trigger_routes.<locals>.handler")
+
+
 def _core_write_routes(app) -> list[tuple[str, str, APIRoute]]:
     """Write routes the public core declares. A spec-declared trigger receiver
-    (``name="trigger_<source>"``, ``server._mount_trigger_routes``) is not one:
-    it binds the run to the workspace that declared it and asserts the caller
-    there itself (#209). Routes a ``cairn.routers`` provider mounts belong to
-    that provider, which audits them the same way."""
+    (:data:`_SPEC_RECEIVER`) is not one: it binds the run to the workspace that
+    declared it and asserts the caller there itself (#209). Routes a
+    ``cairn.routers`` provider mounts belong to that provider, which audits
+    them the same way."""
     out = []
     for r in app.routes:
         if not isinstance(r, APIRoute) or not r.endpoint.__module__.startswith("cairn.core."):
             continue
-        if r.name.startswith("trigger_"):
+        if (r.endpoint.__module__, r.endpoint.__qualname__) == _SPEC_RECEIVER:
             continue
         for m in sorted(r.methods & _WRITE_METHODS):
             out.append((m, r.path, r))
@@ -275,15 +337,15 @@ def _core_write_routes(app) -> list[tuple[str, str, APIRoute]]:
 
 def test_every_write_route_asserts_the_workspace_or_says_why_not():
     missing = [f"{m} {p}" for m, p, r in _core_write_routes(_app())
-               if (m, p) not in EXEMPT and support.writable_workspace not in _calls(r.dependant)]
+               if (m, p) not in EXEMPT and not _guarded(r)]
     assert not missing, (
-        "write routes without Depends(console_support.writable_workspace) and no "
+        "write routes without Depends(console_support.writable_workspace[_unless_worker]) and no "
         f"exemption in EXEMPT: {missing}")
 
 
 def test_every_guarded_route_is_exercised_by_the_behaviour_tests():
     guarded = {(m, p) for m, p, r in _core_write_routes(_app())
-               if support.writable_workspace in _calls(r.dependant)}
+               if _guarded(r)}
     exercised = set()
     for m, p, _kw, _st in GUARDED:
         exercised |= {(gm, gp) for gm, gp in guarded if gm == m and _same_route(gp, p)}
@@ -294,7 +356,7 @@ def test_every_exemption_names_a_live_route_and_none_is_also_guarded():
     routes = {(m, p): r for m, p, r in _core_write_routes(_app())}
     stale = sorted(k for k in EXEMPT if k not in routes)
     assert not stale, f"EXEMPT names routes the app no longer has: {stale}"
-    both = sorted(k for k in EXEMPT if support.writable_workspace in _calls(routes[k].dependant))
+    both = sorted(k for k in EXEMPT if _guarded(routes[k]))
     assert not both, f"exempted yet guarded (drop the exemption): {both}"
 
 
@@ -302,3 +364,19 @@ def _same_route(template: str, concrete: str) -> bool:
     a, b = template.strip("/").split("/"), concrete.strip("/").split("/")
     return len(a) == len(b) and all(x == y or (x.startswith("{") and x.endswith("}"))
                                     for x, y in zip(a, b))
+
+
+def test_the_spec_receiver_exclusion_matches_the_mounted_handler(vendor_trigger_specs):
+    """:data:`_SPEC_RECEIVER` names the handler ``_mount_trigger_routes`` really
+    mounts, so the exclusion cannot silently stop matching (or match by name)."""
+    from fastapi import FastAPI
+
+    from cairn.core.triggers.server import _mount_trigger_routes
+
+    app = FastAPI()
+    fake = types.SimpleNamespace(specs=list(vendor_trigger_specs.values()),
+                                 workspace_for=lambda _s: "default")
+    _mount_trigger_routes(app, fake)
+    mounted = [r for r in app.routes if isinstance(r, APIRoute)]
+    assert mounted and all((r.endpoint.__module__, r.endpoint.__qualname__) == _SPEC_RECEIVER
+                           for r in mounted)

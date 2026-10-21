@@ -23,13 +23,15 @@ from pathlib import Path
 from typing import Annotated, Any, Optional
 
 import tomlkit  # comment-preserving TOML read/write for the profile form (base dep)
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 
 from cairn.core.profile_backends import get_field  # Environment backends configurator (#303)
 from cairn.core.triggers.auth import (  # account-scope the API (#392 p2)
     _oauth2_scheme,
+    authenticated_claims,
     caller_identity,
     identity_from_claims,
+    token_run_scope,
 )
 
 
@@ -324,8 +326,10 @@ async def assert_can_write_workspace(token: Optional[str]) -> str:
     assertion for the path form, but a write is worth the second check: the
     ``X-Cairn-Workspace`` header fallback reaches the flat route too, and a
     fail-open tenancy check on a write is the #1610 shape of bug. Auth-off
-    (keyless dev) resolves to no account, which ``assert_workspace_allowed``
-    treats as "no boundary to enforce" — single-node OSS is unchanged.
+    (keyless dev) resolves to the implicit ``default`` account
+    (:func:`caller_account`), which owns every workspace a keyless deployment
+    creates, so single-node OSS is unchanged; a workspace another account owns
+    (one created while auth was on) is refused (403) with auth off too.
 
     Lives here rather than in one router because more than one needs it: the
     workspace-variable writes (#1974) and ``POST /start`` (#1975), which is the
@@ -366,4 +370,23 @@ async def writable_workspace(
     keyless deployment creates.
     """
     return await assert_can_write_workspace(token)
+
+
+async def writable_workspace_unless_worker(
+    request: Request,
+    token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
+) -> str:
+    """:func:`writable_workspace` for a route a per-run worker token also calls
+    (``POST /runs/{id}/events/ingest``).
+
+    A run-scoped worker token (``scope=run-ingest`` / ``sub=worker:<run>``,
+    :func:`~cairn.core.triggers.auth.token_run_scope`) belongs to no account's
+    membership; the bearer guard already limits it to its own run (#120), so it
+    keeps that path. Every other caller — a user's or an operator's token, or
+    auth off — gets the same check as :func:`writable_workspace`."""
+    claims = authenticated_claims(request.scope)
+    if claims is not None and token_run_scope(claims) is not None:
+        from cairn.core.workspace import current_workspace  # noqa: PLC0415 — as above
+        return current_workspace()
+    return await writable_workspace(token)
 
