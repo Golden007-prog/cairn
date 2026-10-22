@@ -162,10 +162,20 @@ def resolve_corpus_source(
     raise ValueError(f"unrecognized corpus source: {source_uri!r}")
 
 
+def _workspace_rag_collection(name: str, workspace_id: Optional[str]) -> str:
+    """The physical collection of BYO corpus ``name`` of ``workspace_id``: the
+    embedder-scoped ``rag_<name>__<fp>`` (#512) namespaced by the corpus's OWN
+    workspace (ADR-0062) — the ``default`` workspace keeps the bare name."""
+    from cairn.core.workspace import DEFAULT_WORKSPACE, workspace_collection
+
+    return workspace_collection(rag_collection(name), workspace_id or DEFAULT_WORKSPACE)
+
+
 def workspace_corpus_targets(corpora) -> list[CorpusTarget]:
     """Map BYO records → ``CorpusTarget``s for COMPOSITION (list_roles). ``root``
     carries the source ref, unresolved — resolution happens only at index time,
-    so listing/composing roles never clones anything."""
+    so listing/composing roles never clones anything. ``collection`` is the
+    corpus's workspace-scoped collection."""
     out: list[CorpusTarget] = []
     for c in corpora:
         if not c.name or not c.role:
@@ -175,20 +185,22 @@ def workspace_corpus_targets(corpora) -> list[CorpusTarget]:
             name=c.name,
             corpus_id=f"ws:{c.workspace_id}/{c.name}",
             root=c.source_uri,
-            collection=rag_collection(c.name),
+            collection=_workspace_rag_collection(c.name, c.workspace_id),
             freshness=None,
             role=c.role,
         ))
     return out
 
 
-def workspace_corpus_targets_sync(workspace=None) -> list[CorpusTarget]:
-    """BYO targets for the (sync) role-composition path — reads the store
-    synchronously; empty on any hiccup so composition never breaks."""
+def workspace_corpus_targets_sync(workspace: Optional[str] = None) -> list[CorpusTarget]:
+    """BYO targets of ONE workspace (default: the current one) for the (sync)
+    role-composition path — reads the store synchronously; empty on any hiccup
+    so composition never breaks. Never another workspace's corpora."""
     try:
         from cairn.core.storage.knowledge_corpora import get_workspace_corpus_store
+        from cairn.core.workspace import current_workspace
 
-        rows = get_workspace_corpus_store().list_sync(workspace)
+        rows = get_workspace_corpus_store().list_sync(workspace or current_workspace())
     except Exception:  # noqa: BLE001
         return []
     return workspace_corpus_targets(rows)
@@ -199,17 +211,26 @@ async def index_workspace_corpus(corpus, *, catalog=None, allow_local: bool = Fa
     → chunk → embed → upsert) into its embedder-scoped collection — the same
     ``index_corpus`` packs use. Cloned dirs are cleaned up. Returns the
     IndexResult (or a str on skip). ``allow_local`` as in
-    :func:`resolve_corpus_source` (deployment callers only)."""
+    :func:`resolve_corpus_source` (deployment callers only).
+
+    The corpus is indexed IN ITS OWN WORKSPACE (``corpus.workspace_id``), not the
+    caller's context: its vectors and catalog entries land in that workspace's
+    collection whether a request in that workspace, the CLI or a background job
+    runs this (ADR-0062 "Isolation")."""
+    from cairn.core.workspace import DEFAULT_WORKSPACE, reset_current_workspace, set_current_workspace
     from cairn.services.rag.indexer import index_corpus  # lazy: LlamaIndex ingest chain
 
     cloned = is_git_source(corpus.source_uri) and not corpus.source_uri.startswith("file://")
     local_dir = resolve_corpus_source(corpus.source_uri, allow_local=allow_local)
-    corpus_id = f"ws:{corpus.workspace_id}/{corpus.name}"
-    collection = rag_collection(corpus.name)
+    workspace_id = corpus.workspace_id or DEFAULT_WORKSPACE
+    corpus_id = f"ws:{workspace_id}/{corpus.name}"
+    token = set_current_workspace(workspace_id)
     try:
-        logger.info("[byo] indexing %s from %s → %s", corpus_id, corpus.source_uri, collection)
-        return await index_corpus(corpus_id, local_dir, catalog=catalog, collection=collection)
+        logger.info("[byo] indexing %s from %s → %s", corpus_id, corpus.source_uri,
+                    _workspace_rag_collection(corpus.name, workspace_id))
+        return await index_corpus(corpus_id, local_dir, catalog=catalog, collection=rag_collection(corpus.name))
     finally:
+        reset_current_workspace(token)
         if cloned and os.path.isdir(local_dir):
             shutil.rmtree(local_dir, ignore_errors=True)
 
