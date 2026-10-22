@@ -189,19 +189,23 @@ def test_a_tenant_clone_env_is_an_allowlist(git_stub, tmp_path, monkeypatch):
     def _run(cmd, **kw):
         env = kw["env"]
         seen["env"] = dict(env)
-        seen["home_listing"] = sorted(os.listdir(env["HOME"]))
+        seen["home_listing"] = sorted(os.listdir(env.get("HOME") or "/nonexistent"))
         return subprocess.CompletedProcess(cmd, 0)
 
     monkeypatch.setattr(byo.subprocess, "run", _run)
     resolve_corpus_source("https://github.com/acme/docs.git", dest=str(tmp_path / "d"))
     env = seen["env"]
-    for k in ("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_PARAMETERS",
-              "GIT_ASKPASS", "SSH_ASKPASS", "SERVER_ONLY_SECRET"):
-        assert k not in env, k
-    for k, v in kept.items():
-        assert env[k] == v
-    assert env["PATH"] == os.environ["PATH"]
-    assert env["HOME"] != str(tmp_path / "server-home")
-    assert env["XDG_CONFIG_HOME"] == env["HOME"]
+    # compare names only: a failure must not print the environment's values
+    leaked = sorted(k for k in ("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+                                "GIT_CONFIG_PARAMETERS", "GIT_ASKPASS", "SSH_ASKPASS",
+                                "SERVER_ONLY_SECRET") if k in env)
+    assert leaked == []
+    assert sorted(k for k, v in kept.items() if env.get(k) != v) == []
+    path_kept = env.get("PATH") == os.environ["PATH"]
+    home = env.get("HOME", "")
+    xdg = env.get("XDG_CONFIG_HOME", "")
+    assert path_kept
+    assert home and home != str(server_home)
+    assert xdg == home
     assert seen["home_listing"] == []  # empty while git runs
-    assert not os.path.exists(env["HOME"])  # and cleaned up after
+    assert not os.path.exists(home)  # and cleaned up after
