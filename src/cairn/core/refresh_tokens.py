@@ -24,6 +24,10 @@ What a row is:
   stored it) and a sibling takes its place: a parent never has more than one
   live child, and a child that was itself already rotated makes the replay
   reuse after all.
+* A superseded child (revoked, never used) presented
+  :data:`REUSE_GRACE_SECONDS` or more after it was superseded ends its family
+  with a WARNING (ADR-0145): its holder is the client a replay displaced, so the
+  replay may have been a copy of the token.
 * The family's lifetime is fixed when it starts: ``CAIRN_REFRESH_TOKEN_DAYS``
   (default 30) when the sign-in asked to be remembered, :data:`SESSION_HOURS`
   otherwise. A rotated row inherits its family's ``expires_at``.
@@ -444,17 +448,38 @@ def _within_grace(row: RefreshToken, now: datetime) -> bool:
     return -_CLOCK_SKEW_SECONDS <= elapsed < REUSE_GRACE_SECONDS
 
 
+def _revoked_long_enough_ago(row: RefreshToken, now: datetime) -> bool:
+    """Whether ``row`` was revoked at least :data:`REUSE_GRACE_SECONDS` ago."""
+    if row.revoked_at is None:
+        return False
+    return (now - datetime.fromisoformat(row.revoked_at)).total_seconds() >= REUSE_GRACE_SECONDS
+
+
 async def validate(raw: str, *, store: Any = None) -> RefreshToken:
     """The row for ``raw`` if it may be refreshed, or :class:`RefreshError`.
 
     A row that was already rotated is reuse, and its whole family is revoked
     before refusing, unless it was rotated less than :data:`REUSE_GRACE_SECONDS`
-    ago (ADR-0144): then it is returned, and :func:`rotate` renews it as a replay."""
+    ago (ADR-0144): then it is returned, and :func:`rotate` renews it as a replay.
+
+    A revoked row is refused. If it was never used and was revoked at least
+    :data:`REUSE_GRACE_SECONDS` ago, it is a child a replay superseded (ADR-0145):
+    whoever holds it is the client the replay displaced, so the replay may have
+    been a copy of the token. The family is revoked, and if that ended anything
+    (rows a sign-out, password change or earlier reuse already revoked end
+    nothing) it is logged as a WARNING. Within the window the row is refused
+    without that, so a request already in flight with the just-superseded child
+    cannot end the sibling that replaced it."""
     store = store or default_refresh_token_store()
     row = await store.get(hash_token(raw)) if raw else None
     if row is None:
         raise RefreshError("unknown")
     if row.revoked_at is not None:
+        if row.used_at is None and _revoked_long_enough_ago(row, _now()):
+            n = await store.revoke_family(row.family_id, at=_iso(_now()))
+            if n > 0:
+                logger.warning("superseded refresh token presented, family revoked: sub=%s family=%s…",
+                               row.sub, row.family_id[:8])
         raise RefreshError("revoked")
     if row.used_at is not None and not _within_grace(row, _now()):
         await revoke_family(row, reason="reuse of a rotated token", store=store)
