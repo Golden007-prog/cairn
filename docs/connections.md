@@ -52,7 +52,11 @@ than whichever request or worker happens to execute them: a template run, an
 in-process resume, a pipeline's template, task and flow legs (in-process and under
 the Temporal owner), and a remote job's poll and relaunch. With auth on, a record
 that names no workspace, or a workspace no store holds, is refused rather than
-resolved as the deployment's.
+resolved as the deployment's, and so is a lookup made outside any workspace scope
+(no request and no run scoped from its record, as for a template's operation
+nodes on a durable runtime's worker): it raises `WorkspaceScopeRequired`. The
+deployment's own tools (`cairn connect test`, `cairn doctor`) look up the
+deployment's connections explicitly.
 `resolve_connection(name, account_id=…)` looks a name up in one account only:
 when `account_id` is omitted it is the current run's (`run_account()`). A tenant
 account's run finds only its own rows; the deployment (`default`) finds only the
@@ -60,10 +64,12 @@ deployment's. No row is shared across accounts by name. The same holds for
 `target_cap`, the model licence gate's token check, preflight's connection
 warnings and the templates contract's connected-MCP list. A profile-bound backend
 connection (`backends.<field>_connection`) is the deployment's and always resolves
-in `default`.
+in `default`. A flow leg's engine target (`dataflow_target` / `ml_target`) is
+looked up in the run's account, so a tenant's flow legs run on targets in its own
+account.
 
 An operator's declared secrets (`secrets:` in its binding) are resolved in the
-run's account too. For the deployment they are bridged into the process
+run's account too (ADR-0143). For the deployment they are bridged into the process
 environment as before (`inject_declared_secrets`). A tenant account's values are
 never written to the process environment: `declared_secret_values` reads them
 from the account's own connections, and they back that invocation's

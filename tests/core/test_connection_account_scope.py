@@ -147,6 +147,38 @@ def test_workspace_scope_restores_the_outer_workspace():
 # ── resolve_connection ────────────────────────────────────────────────
 
 
+async def test_auth_on_resolution_outside_any_workspace_scope_is_refused(world, monkeypatch):
+    """A template's operation node on a durable runtime's worker runs with no
+    request and no record-scoped run: with auth on it is refused, never resolved
+    as the deployment."""
+    from cairn.core.operator.runtime import invoke_operator_core, invoke_operator_inprocess
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    assert workspace._active.get() is None
+    with pytest.raises(workspace.WorkspaceScopeRequired):
+        await resolve_connection("gpu")
+    binding = OperationBinding(operator="probe/op", input={}, output={},
+                               execution=ExecutionField(compute_target="gpu"))
+    with pytest.raises(workspace.WorkspaceScopeRequired):
+        await invoke_operator_inprocess(binding, _op({}), state={}, pipeline_id="p", node_name="n")
+    before = _env_snapshot()
+    with pytest.raises(workspace.WorkspaceScopeRequired):
+        await invoke_operator_core(_op({}), {}, pipeline_id="p", node_name="n", secret_keys=["KAGGLE_KEY"])
+    assert _env_snapshot() == before
+    assert await inject_declared_secrets(["KAGGLE_KEY"]) == []          # never raises, injects nothing
+    # an explicit account (the deployment's own tools) and a scoped run still resolve
+    assert (await resolve_connection("gpu", account_id="default")).config["host"] == "deploy-host"
+    with workspace_scope("ws-a"):
+        assert (await resolve_connection("a-box")).config["host"] == "a-host"
+
+
+async def test_auth_off_resolution_outside_a_scope_is_the_deployments(world):
+    assert workspace._active.get() is None
+    assert (await resolve_connection("gpu")).config["host"] == "deploy-host"
+
+
+
+
 async def test_tenant_resolves_only_its_own_rows_by_name(world):
     assert (await resolve_connection("a-box", account_id="acct-a")).config["host"] == "a-host"
     assert await resolve_connection("b-box", account_id="acct-a") is None   # another account's

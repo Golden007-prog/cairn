@@ -377,7 +377,10 @@ async def workspace_account(workspace_id: Optional[str] = None, *, store: Any = 
     """The account that owns ``workspace_id`` (default: :func:`current_workspace`).
 
     This is the account a run in that workspace resolves connections and secrets
-    in. With auth off, a workspace no store holds (keyless dev naming an id)
+    in. With auth on, omitting ``workspace_id`` outside any workspace scope (no
+    request, no run scoped from its record) raises :class:`WorkspaceScopeRequired`
+    rather than answering for the process default. With auth off, a workspace no
+    store holds (keyless dev naming an id)
     belongs to the deployment's ``default`` account. With auth on, no account owns
     such a workspace, so it raises :class:`WorkspaceForbidden` — the same answer
     :func:`assert_workspace_allowed` gives. A store error propagates: a caller
@@ -385,6 +388,13 @@ async def workspace_account(workspace_id: Optional[str] = None, *, store: Any = 
     answer."""
     from cairn.core.auth_tokens import auth_enabled  # noqa: PLC0415 — keep the import graph of this module flat
 
+    if not (workspace_id or "").strip() and _active.get() is None and auth_enabled():
+        # No workspace named and none in scope (no request, no record-scoped run):
+        # work that has lost its run's workspace — a template's operation node on a
+        # durable runtime's worker — must not resolve as the deployment.
+        raise WorkspaceScopeRequired(
+            "no workspace in scope: with auth on, connections and secrets resolve only "
+            "inside a run's workspace")
     ws_id = (workspace_id or current_workspace()).strip() or DEFAULT_WORKSPACE
     ws = await (store or get_workspace_store()).get(ws_id)
     if ws is None:
