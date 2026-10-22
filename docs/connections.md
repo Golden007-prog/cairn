@@ -45,6 +45,50 @@ account), and an OAuth connection reads the token stored under its own name. The
 unchanged, and references stored before accounts were namespaced keep resolving
 for it.
 
+A run resolves connections and secrets in its own account: the account that owns
+the run's workspace (`workspace_account(workspace_id)`). These run in the workspace
+their record names (`workspace_scope`), so the account follows the record rather
+than whichever request or worker happens to execute them: a template run, an
+in-process resume, a pipeline's template, task and flow legs (in-process and under
+the Temporal owner), and a remote job's poll and relaunch. With auth on, a record
+that names no workspace, or a workspace no store holds, is refused rather than
+resolved as the deployment's, and so is a lookup made outside any workspace scope
+(no request and no run scoped from its record, as for a template's operation
+nodes on a durable runtime's worker): it raises `WorkspaceScopeRequired`. The
+deployment's own tools (`cairn connect test`, `cairn doctor`, `cairn compute
+status`) look up the deployment's connections explicitly. Work an operator starts
+from inside a run (`ctx.launch`) starts in the run's workspace; with auth on and
+no workspace in scope it is refused. With auth on, a pipeline step whose record
+names no workspace ends failed (verdict `workspace_unresolved`) and fails its
+pipeline once; a leg in that state marks its run failed.
+`resolve_connection(name, account_id=…)` looks a name up in one account only:
+when `account_id` is omitted it is the current run's (`run_account()`). A tenant
+account's run finds only its own rows; the deployment (`default`) finds only the
+deployment's. No row is shared across accounts by name. The same holds for
+`target_cap`, the model licence gate's token check, preflight's connection
+warnings and the templates contract's connected-MCP list. A profile-bound backend
+connection (`backends.<field>_connection`) is the deployment's and always resolves
+in `default`. A flow leg's engine target (`dataflow_target` / `ml_target`) is
+looked up in the run's account, so a tenant's flow legs run on targets in its own
+account. A target bound in the deployment's profile is a deployment connection: a
+tenant's flow leg that names it does not resolve it, and the leg fails.
+
+An operator's declared secrets (`secrets:` in its binding) are resolved in the
+run's account too (ADR-0143). For the deployment they are bridged into the process
+environment as before (`inject_declared_secrets`). A tenant account's values are
+never written to the process environment: `declared_secret_values` reads them
+from the account's own connections, and they back that invocation's
+`ctx.secrets` alone; the deployment's bound SecretStore is not consulted. A
+declared key matches a tenant connection's secret when the logical key is the
+declared name, or when the provider catalog entry the connection is named after
+maps that key to it (`kaggle`: `KEY` → `KAGGLE_KEY`). An operator that reads a
+credential from `os.environ` instead of `ctx.secrets` receives nothing for a
+tenant run.
+
+Connection names are still unique across the whole deployment (the `connections`
+table's `name` column and the id derived from it), so two accounts cannot use the
+same name.
+
 An MCP connection becomes a client spec through `mcp_server_spec`, which fails
 closed: a `stdio` server (a command run on the cairn server) is built only when
 the caller passes `allow_stdio=True`, and an http/sse `url` must pass the probe's
