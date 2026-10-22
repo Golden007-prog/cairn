@@ -92,3 +92,4 @@ lazily by any module calling a factory.
 | Tags are the only mutable artifact state | DOCUMENTED (`artifacts.py`); not separately tested (UNCLEAR) |
 | Every store follows `CAIRN_STORAGE` | PARTIALLY — legacy knobs remain; `storage/__init__.py:74` documents the fallback ladder |
 | Prod HA needs Postgres for every store | DOCUMENTED gap (P13); several stores have sqlite-only or Null tiers (e.g. `playground/upload_store.py`, `judge_labels.py`) |
+| Knowledge corpora are workspace-scoped (ADR-0062): role composition lists the installed packs' corpora plus the current workspace's own corpora only; a workspace corpus is indexed into its own workspace's collection (`workspace_collection`, one unambiguous prefix per workspace; `default` keeps bare names) whatever context indexes it | CONFIRMED (`services/rag/roles.py list_roles`, `services/rag/byo.py`; `test_workspace_scoped_knowledge.py`) |
