@@ -382,3 +382,66 @@ async def test_waiters_get_the_lock_in_arrival_order():
     gate.set()
     await asyncio.gather(first, *rest)
     assert order == ["w0", "w1", "w2", "w3"]
+
+
+@pytest.mark.asyncio
+async def test_a_waiter_that_gives_up_while_its_hand_over_is_pending_does_not_hold_the_lock():
+    """The waiter is cancelled, then a release picks it before its task resumes:
+    on resuming it must not count as the owner, and re-entering must take the
+    lock for real (a third task then waits), never a second holder."""
+    lock, store, seen = StoreLock(), _SharedStore(hold=False), {}
+    await lock.acquire()  # this test task holds the lock
+
+    async def _other():
+        try:
+            await lock.acquire(timeout=0.05)
+        except VectorStoreBusy:
+            return "waited"
+        lock.release()
+        return "second holder"
+
+    async def _waiter():
+        try:
+            await lock.acquire(timeout=5)
+        except asyncio.CancelledError:
+            asyncio.current_task().uncancel()
+            seen["owned_after_giving_up"] = lock.owned_by_current_task()
+            async with on_collection(store, "again", 4, lock, timeout=1):
+                seen["owner_is_me"] = lock.owned_by_current_task()
+                seen["other"] = await asyncio.create_task(_other())
+            return
+        seen["acquired"] = True
+        lock.release()
+
+    w = asyncio.create_task(_waiter())
+    for _ in range(5):
+        await asyncio.sleep(0)  # parked on its future
+    w.cancel()      # its future is cancelled now; the task resumes on a later tick
+    lock.release()  # this release picks it first
+    await w
+    assert "acquired" not in seen
+    assert seen == {"owned_after_giving_up": False, "owner_is_me": True, "other": "waited"}
+    assert not lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_acquiring_outside_an_asyncio_task_fails_closed():
+    lock = StoreLock()
+    loop = asyncio.get_running_loop()
+    out = loop.create_future()
+
+    def _callback():  # a plain loop callback: no current task
+        coro = lock.acquire(timeout=0.1)
+        try:
+            coro.send(None)
+            out.set_result("suspended")
+        except RuntimeError as exc:
+            out.set_result(str(exc))
+        except StopIteration:
+            out.set_result("acquired")
+        finally:
+            coro.close()
+
+    loop.call_soon(_callback)
+    assert "needs a running asyncio task" in await out
+    assert not lock.locked()

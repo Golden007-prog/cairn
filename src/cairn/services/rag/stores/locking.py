@@ -32,16 +32,21 @@ class VectorStoreBusy(RuntimeError):
 class StoreLock:
     """A FIFO lock for asyncio callers on any event loop or thread.
 
-    Waiters park on a future of their own loop (no polling, no worker thread);
-    a release hands the lock to the oldest waiter. The owner is the asyncio task
-    that acquired it, so a task that merely inherited a context from the owner
-    does not count as holding it. A waiter that times out or is cancelled never
-    ends up owning the lock."""
+    Waiters park on a future of their own loop (no polling, no worker thread).
+    A release hands the lock to the oldest waiter in two steps: the waiter is
+    marked *pending* and a hand-over is scheduled on its loop; only when the
+    hand-over runs does that waiter's task become the owner. So the owner is
+    always a task that completed its acquire, and a task that merely inherited a
+    context from the owner does not count as holding it. A waiter that times out
+    or is cancelled before its hand-over runs gives up its turn at once (the
+    lock passes to the next waiter), and the stale hand-over is ignored. Needs a
+    running asyncio task: without one, :meth:`acquire` raises ``RuntimeError``."""
 
     def __init__(self) -> None:
         self._mutex = threading.Lock()
         self._owner: Optional[asyncio.Task] = None
-        self._waiters: deque[tuple[asyncio.AbstractEventLoop, asyncio.Future, asyncio.Task]] = deque()
+        self._pending: Optional[_Waiter] = None
+        self._waiters: deque[_Waiter] = deque()
         #: the (collection, dim) the owner last selected, for nested re-entry
         self.selected: Optional[tuple[str, int]] = None
 
@@ -50,56 +55,69 @@ class StoreLock:
         return task is not None and self._owner is task
 
     def locked(self) -> bool:
-        return self._owner is not None
+        return self._owner is not None or self._pending is not None
 
     async def acquire(self, timeout: Optional[float] = None) -> None:
         task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError("StoreLock.acquire needs a running asyncio task")
         loop = asyncio.get_running_loop()
         wait = LOCK_WAIT_S if timeout is None else timeout
         with self._mutex:
-            if self._owner is None:
+            if self._owner is None and self._pending is None and not self._waiters:
                 self._owner = task
                 return
-            fut = loop.create_future()
-            entry = (loop, fut, task)
+            entry: _Waiter = (loop, loop.create_future(), task)
             self._waiters.append(entry)
+        fut = entry[1]
         try:
             await asyncio.wait_for(fut, wait)
         except BaseException as exc:
             with self._mutex:
-                try:
+                if entry in self._waiters:  # still queued: leave the queue
                     self._waiters.remove(entry)
-                    granted = False
-                except ValueError:  # a release already handed the lock to this waiter
-                    granted = fut.done() and not fut.cancelled()
+                elif self._pending is entry:  # chosen, hand-over not run yet: pass the turn on
                     if not fut.done():
-                        fut.cancel()  # the pending hand-over sees this and passes the lock on
-            if granted:
-                self.release()
+                        fut.cancel()
+                    self._grant_next_locked()
+                elif self._owner is task:  # the hand-over completed as the wait ended
+                    self._grant_next_locked()
             if isinstance(exc, TimeoutError):
                 raise VectorStoreBusy("knowledge store busy, try again") from None
             raise
 
     def release(self) -> None:
-        while True:
-            with self._mutex:
-                self.selected = None
-                if not self._waiters:
-                    self._owner = None
-                    return
-                loop, fut, task = self._waiters.popleft()
-                self._owner = task
+        with self._mutex:
+            self._grant_next_locked()
+
+    def _grant_next_locked(self) -> None:
+        """With ``_mutex`` held: free the lock, or mark the oldest live waiter pending."""
+        self.selected = None
+        self._owner = None
+        self._pending = None
+        while self._waiters:
+            entry = self._waiters.popleft()
+            self._pending = entry
             try:
-                loop.call_soon_threadsafe(self._hand_over, fut)
+                entry[0].call_soon_threadsafe(self._hand_over, entry)
                 return
             except RuntimeError:  # that waiter's loop is closed: next one
-                continue
+                self._pending = None
 
-    def _hand_over(self, fut: asyncio.Future) -> None:
-        if fut.done():  # the waiter gave up meanwhile
-            self.release()
-        else:
+    def _hand_over(self, entry: "_Waiter") -> None:
+        with self._mutex:
+            if self._pending is not entry:  # stale: the waiter already gave up its turn
+                return
+            _loop, fut, task = entry
+            if fut.done():  # the waiter gave up; its except path has not run yet
+                self._grant_next_locked()
+                return
+            self._pending = None
+            self._owner = task
             fut.set_result(True)
+
+
+_Waiter = tuple[asyncio.AbstractEventLoop, asyncio.Future, asyncio.Task]
 
 
 @asynccontextmanager

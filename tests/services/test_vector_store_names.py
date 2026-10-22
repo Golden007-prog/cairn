@@ -65,3 +65,35 @@ def test_sqlite_keeps_long_names_whole_so_they_stay_distinct():
     assert f"EXISTS {a} " in sv._create_companion_table_sql(a)
     assert f"EXISTS {a}_vec " in sv._create_vec_table_sql(a, 4)
     assert sv._create_companion_table_sql(a) != sv._create_companion_table_sql(b)
+
+
+def test_a_62_or_63_byte_table_gets_distinct_index_names():
+    for size in (62, 63):
+        t = "t" * size
+        names = {pg._index_name(t, "embedding_idx"), pg._index_name(t, "source_idx")}
+        assert len(names) == 2 and t not in names and all(len(n) <= 63 for n in names), (size, names)
+    t61 = "t" * 61
+    assert pg._index_name(t61, "embedding_idx") == f"{t61}_embedding_idx"[:63]  # unchanged up to 61 bytes
+
+
+def test_sqlite_creates_a_collection_once_per_store(tmp_path):
+    import asyncio
+
+    import pytest
+
+    pytest.importorskip("sqlite_vec")
+    store = sv.SqliteVecStore(path=str(tmp_path / "v.db"))
+    calls = []
+    real = store._initialize_sync
+    store._initialize_sync = lambda table, dim: (calls.append(table), real(table, dim))
+
+    async def _go():
+        for _ in range(3):
+            await store.initialize("c_one", 4)
+            await store.initialize("c_two", 4)
+        assert store._collection == "c_two"
+        await store.close()
+        await store.initialize("c_one", 4)  # a closed store checks again
+
+    asyncio.run(_go())
+    assert calls == ["c_one", "c_two", "c_one"]

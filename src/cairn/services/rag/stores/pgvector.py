@@ -79,10 +79,20 @@ def pg_table_name(collection: str) -> str:
 
 
 def _index_name(table: str, suffix: str) -> str:
-    """``<table>_<suffix>`` cut to 63 bytes — the name Postgres has always given
-    these indexes, now explicit. Table names are at most 63 bytes (see
-    :func:`pg_table_name`), so two tables' index names differ wherever the tables do."""
-    return f"{table}_{suffix}".encode("utf-8")[:_PG_IDENTIFIER_MAX].decode("utf-8", "ignore")
+    """The name of one of ``table``'s indexes.
+
+    For a table name of at most 61 bytes this is ``<table>_<suffix>`` cut to 63
+    bytes — the name Postgres has always given these indexes, so existing
+    indexes keep their names. The cut keeps at least ``_e`` / ``_s`` after the
+    table name, so the two indexes of a table differ, and differ from the
+    table. A 62- or 63-byte table name would leave both cut names equal (or
+    equal to the table name), so ``CREATE INDEX IF NOT EXISTS`` skipped an
+    index; such a table gets hashed index names instead (:func:`pg_table_name`
+    of the full ``<table>_<suffix>``)."""
+    full = f"{table}_{suffix}"
+    if len(table.encode("utf-8")) <= _PG_IDENTIFIER_MAX - 2:
+        return full.encode("utf-8")[:_PG_IDENTIFIER_MAX].decode("utf-8", "ignore")
+    return pg_table_name(full)
 
 
 def _create_table_sql(table: str, dim: int) -> str:
