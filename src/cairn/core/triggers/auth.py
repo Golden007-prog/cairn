@@ -838,8 +838,9 @@ async def refresh_access_token(request: Request, response: Response) -> Token:
 
     Requires ``X-Cairn-Refresh: 1`` and an ``Origin`` (else ``Referer``) naming
     this server; 403 otherwise (cookie untouched). A token that was already
-    rotated revokes its whole family. Every 401 refusal clears the cookie; a 403
-    or 400 does not."""
+    rotated revokes its whole family, unless it was rotated less than
+    ``refresh_tokens.REUSE_GRACE_SECONDS`` ago: then it renews as a replay
+    (ADR-0144). Every 401 refusal clears the cookie; a 403 or 400 does not."""
     from cairn.core import refresh_tokens  # noqa: PLC0415
 
     if not auth_enabled():
