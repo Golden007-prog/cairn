@@ -140,7 +140,7 @@ async def test_auth_on_a_record_with_no_workspace_is_refused(world, monkeypatch)
             self.ran.append(await resolve_connection("gpu"))
 
     probe = Probe()
-    assert await probe.leg(SimpleNamespace(workspace_id="")) is None
+    assert await probe.leg(SimpleNamespace(workspace_id="")) is False   # the caller is told to stop
     assert probe.refused == ["leg"] and probe.ran == []      # refused visibly, nothing resolved
 
 
@@ -739,7 +739,7 @@ async def test_a_launch_from_a_tenant_run_lands_in_the_runs_workspace(world, mon
     assert launched == {"pipeline_ws": "ws-a", "pid": "p-new"}
 
 
-async def test_a_template_launched_from_a_tenant_run_is_stamped_with_its_workspace(world, monkeypatch):
+async def test_a_template_launched_from_a_run_is_stamped_with_its_workspace_or_refused(world, monkeypatch):
     from cairn.core.dispatch.dispatcher import RunDispatcher
 
     disp = RunDispatcher(runner=object(), store=_RunStore())
@@ -752,6 +752,11 @@ async def test_a_template_launched_from_a_tenant_run_is_stamped_with_its_workspa
     monkeypatch.setattr(disp, "run_template", _run_template)
     with workspace_scope("ws-a"):
         assert await disp.launch_handle()("demo/other", {}, {}) == "r-new"
+    assert stamped == ["ws-a"]
+    # with auth on and no workspace in scope the template is not started in the default
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    with pytest.raises(workspace.WorkspaceScopeRequired):
+        await disp.launch_handle()("demo/other", {}, {})
     assert stamped == ["ws-a"]
 
 
@@ -900,3 +905,113 @@ async def test_compute_status_cli_reads_the_deployments_box_with_auth_on(world, 
     assert row["host"] == "deploy-host"
     with pytest.raises(Exception, match="did not resolve"):
         await compute._status("a-box")                      # a tenant's box is not the deployment's
+
+
+# ── auth on: a refused step stops its callers (real bridge paths) ─────
+
+
+class _Recorder:
+    def __init__(self, monkeypatch):
+        from cairn.core.dispatch.pipeline_bridge import PipelineBridge
+
+        self.audits: list = []
+        self.notified: list = []
+
+        async def _audit(bridge, rec, step_id, event, detail):
+            self.audits.append((step_id, event))
+
+        async def _notify(bridge, rec, reason):
+            self.notified.append(reason)
+
+        monkeypatch.setattr(PipelineBridge, "_audit", _audit)
+        monkeypatch.setattr(PipelineBridge, "_notify_pipeline_failed", _notify)
+
+
+def _real_bridge():
+    from cairn.core.dispatch.pipeline_bridge import PipelineBridge
+    from cairn.core.storage.pipeline_store import InMemoryPipelineStore
+
+    calls: list = []
+
+    async def _run_template(ref, inputs, **kw):
+        calls.append(ref)
+        return SimpleNamespace(id=f"run-{len(calls)}")
+
+    async def _emit(*a, **kw):
+        return None
+
+    disp = SimpleNamespace(store=_RunStore(), _emit=_emit, run_template=_run_template)
+    return PipelineBridge(disp, store=InMemoryPipelineStore()), calls
+
+
+def _plan(*steps):
+    from cairn.core.engine.bundle_pipeline import PipelinePlan
+
+    return PipelinePlan(name="ws-less", steps=list(steps))
+
+
+async def test_auth_on_a_pipeline_whose_record_names_no_workspace_ends_failed_once(world, monkeypatch):
+    from cairn.core.engine.bundle_pipeline import PipelinePlanStep
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    rec_ = _Recorder(monkeypatch)
+    bridge, calls = _real_bridge()
+    rec = await bridge.start_pipeline(_plan(PipelinePlanStep(id="work", ref="demo/work"),
+                                            PipelinePlanStep(id="next", ref="demo/next", depends_on=["work"])),
+                                      inputs={}, workspace_id="")
+    stored = await bridge.store.get(rec.pipeline_id)
+    assert stored.status == "failed"
+    assert stored.step_state["work"].status == "failed"
+    assert stored.step_state["work"].verdict == "workspace_unresolved"
+    assert rec_.notified == ["record names no workspace"]
+    assert calls == []
+
+
+async def test_auth_on_a_refused_pipeline_with_a_finalizer_does_not_recurse(world, monkeypatch):
+    from cairn.core.engine.bundle_pipeline import PipelinePlanStep
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    rec_ = _Recorder(monkeypatch)
+    bridge, calls = _real_bridge()
+    rec = await bridge.start_pipeline(_plan(PipelinePlanStep(id="work", ref="demo/work"),
+                                            PipelinePlanStep(id="release", ref="demo/release", finalizer=True)),
+                                      inputs={}, workspace_id="")
+    stored = await bridge.store.get(rec.pipeline_id)
+    assert stored.status == "failed"
+    assert stored.step_state["release"].status == "failed"            # refused once, not started
+    assert ("release", "finalizer_started") not in rec_.audits
+    assert len(rec_.notified) == 1
+    assert calls == []
+
+
+async def test_auth_on_advance_step_on_a_record_with_no_workspace_fails_without_approval(world, monkeypatch):
+    from cairn.core.engine.bundle_pipeline import PipelinePlanStep
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    rec_ = _Recorder(monkeypatch)
+    bridge, calls = _real_bridge()
+    rec = await bridge.start_pipeline(_plan(PipelinePlanStep(id="work", ref="demo/work", trigger="manual")),
+                                      inputs={}, workspace_id="")
+    assert (await bridge.store.get(rec.pipeline_id)).status != "failed"   # nothing submitted yet
+    out = await bridge.advance_step(rec.pipeline_id, "work", approver="alice")
+    assert out.status == "failed"
+    assert (await bridge.store.get(rec.pipeline_id)).status == "failed"
+    assert not any(e in ("approved", "advanced") for _, e in rec_.audits)
+    assert len(rec_.notified) == 1 and calls == []
+
+
+async def test_auth_on_held_back_steps_on_a_record_with_no_workspace_end_failed(world, monkeypatch):
+    from cairn.core.engine.bundle_pipeline import PipelinePlanStep
+    from cairn.core.storage.pipeline_store import PipelineRecord, StepState
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    rec_ = _Recorder(monkeypatch)
+    bridge, calls = _real_bridge()
+    rec = await bridge.store.put(PipelineRecord(
+        pipeline_name="ws-less", status="running", workspace_id="", inputs={},
+        plan=_plan(PipelinePlanStep(id="work", ref="demo/work")),
+        step_state={"work": StepState(status="pending")}))
+    await bridge._advance_held_back(rec.pipeline_id, {"work"})
+    stored = await bridge.store.get(rec.pipeline_id)
+    assert stored.status == "failed"
+    assert len(rec_.notified) == 1 and calls == []

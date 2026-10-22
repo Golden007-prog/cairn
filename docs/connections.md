@@ -55,8 +55,12 @@ that names no workspace, or a workspace no store holds, is refused rather than
 resolved as the deployment's, and so is a lookup made outside any workspace scope
 (no request and no run scoped from its record, as for a template's operation
 nodes on a durable runtime's worker): it raises `WorkspaceScopeRequired`. The
-deployment's own tools (`cairn connect test`, `cairn doctor`) look up the
-deployment's connections explicitly.
+deployment's own tools (`cairn connect test`, `cairn doctor`, `cairn compute
+status`) look up the deployment's connections explicitly. Work an operator starts
+from inside a run (`ctx.launch`) starts in the run's workspace; with auth on and
+no workspace in scope it is refused. With auth on, a pipeline step whose record
+names no workspace ends failed (verdict `workspace_unresolved`) and fails its
+pipeline once; a leg in that state marks its run failed.
 `resolve_connection(name, account_id=…)` looks a name up in one account only:
 when `account_id` is omitted it is the current run's (`run_account()`). A tenant
 account's run finds only its own rows; the deployment (`default`) finds only the
