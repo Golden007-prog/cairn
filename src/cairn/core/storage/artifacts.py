@@ -438,6 +438,11 @@ def _version_row(row: Sequence) -> dict[str, Any]:
     }
 
 
+#: How often a registration re-reads the next version number after another
+#: writer took it (SQLite shared by several processes).
+_VERSION_INSERT_ATTEMPTS = 5
+
+
 def _dataset_workspace(workspace_id: Optional[str]) -> str:
     """The workspace a by-name dataset read or write answers in: the one named,
     else the current one (the request's or the run's)."""
@@ -620,44 +625,55 @@ class SqliteArtifactStore:
         detail_json = json.dumps(detail) if detail else None
         await _guard_golden(role, name, rec, ws)
         async with self._lock:
-            # The no-op compares with THIS workspace's head; the next number is
-            # the name's, since (name, version) is the key.
-            head = self._conn.execute(
-                "SELECT version, artifact_id FROM dataset_versions WHERE name=? AND workspace_id=? "
-                "ORDER BY version DESC LIMIT 1", (name, ws)).fetchone()
-            last = self._conn.execute(
-                "SELECT MAX(version) FROM dataset_versions WHERE name=?", (name,)).fetchone()
-            if head and head[1] == artifact_id:
-                # Identical bytes at the head — no new version (immutability by
-                # construction). The DECLARATION still lands: a re-register that
-                # names a role is how a caller says what the head is for, and
-                # dropping it would be the silent-vanish this store refuses to do.
-                self._conn.execute(
-                    "UPDATE dataset_versions SET role=?, schema=?, column_mapping=?, "
-                    "parent_version=?, split_policy=?, dated_at=COALESCE(?, dated_at), "
-                    "origin=COALESCE(?, origin), origin_detail=COALESCE(?, origin_detail) "
-                    "WHERE name=? AND version=?",
-                    (role, schema,
-                     json.dumps(column_mapping) if column_mapping else None,
-                     parent_version or "",
-                     json.dumps(split_policy) if split_policy else None,
-                     dated, origin, detail_json,
-                     name, int(head[0])))
-                self._conn.commit()
-                return int(head[0])
-            version = (int(last[0]) + 1) if last and last[0] is not None else 1
-            self._conn.execute(
-                "INSERT INTO dataset_versions (name, version, artifact_id, created_at, created_by, "
-                "role, schema, column_mapping, parent_version, split_policy, workspace_id, "
-                "dated_at, origin, origin_detail) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (name, version, artifact_id, utc_now_iso(), actor, role, schema,
-                 json.dumps(column_mapping) if column_mapping else None,
-                 parent_version or "",
-                 json.dumps(split_policy) if split_policy else None, ws,
-                 dated, origin, detail_json))
-            self._conn.commit()
-        return version
+            # The lock serialises this process; another process on the same file
+            # can take the same next number between the read and the insert, so
+            # a duplicate key is retried (bounded) with the numbers re-read.
+            for attempt in range(_VERSION_INSERT_ATTEMPTS):
+                # The no-op compares with THIS workspace's head; the next number
+                # is the name's, since (name, version) is the key.
+                head = self._conn.execute(
+                    "SELECT version, artifact_id FROM dataset_versions WHERE name=? AND workspace_id=? "
+                    "ORDER BY version DESC LIMIT 1", (name, ws)).fetchone()
+                last = self._conn.execute(
+                    "SELECT MAX(version) FROM dataset_versions WHERE name=?", (name,)).fetchone()
+                if head and head[1] == artifact_id:
+                    # Identical bytes at the head — no new version (immutability by
+                    # construction). The DECLARATION still lands: a re-register that
+                    # names a role is how a caller says what the head is for, and
+                    # dropping it would be the silent-vanish this store refuses to do.
+                    self._conn.execute(
+                        "UPDATE dataset_versions SET role=?, schema=?, column_mapping=?, "
+                        "parent_version=?, split_policy=?, dated_at=COALESCE(?, dated_at), "
+                        "origin=COALESCE(?, origin), origin_detail=COALESCE(?, origin_detail) "
+                        "WHERE name=? AND version=? AND workspace_id=?",
+                        (role, schema,
+                         json.dumps(column_mapping) if column_mapping else None,
+                         parent_version or "",
+                         json.dumps(split_policy) if split_policy else None,
+                         dated, origin, detail_json,
+                         name, int(head[0]), ws))
+                    self._conn.commit()
+                    return int(head[0])
+                version = (int(last[0]) + 1) if last and last[0] is not None else 1
+                try:
+                    self._conn.execute(
+                        "INSERT INTO dataset_versions (name, version, artifact_id, created_at, "
+                        "created_by, role, schema, column_mapping, parent_version, split_policy, "
+                        "workspace_id, dated_at, origin, origin_detail) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (name, version, artifact_id, utc_now_iso(), actor, role, schema,
+                         json.dumps(column_mapping) if column_mapping else None,
+                         parent_version or "",
+                         json.dumps(split_policy) if split_policy else None, ws,
+                         dated, origin, detail_json))
+                    self._conn.commit()
+                except sqlite3.IntegrityError:
+                    self._conn.rollback()
+                    if attempt + 1 == _VERSION_INSERT_ATTEMPTS:
+                        raise
+                    continue
+                return version
+        raise AssertionError("unreachable")  # pragma: no cover — the loop returns or raises
 
     async def get_dataset_version(self, name, version=None, *, workspace_id=None):
         ws = _dataset_workspace(workspace_id)
@@ -708,7 +724,7 @@ class SqliteArtifactStore:
         wanted = [str(r) for r in roles]
         if not wanted:
             return []
-        ws = workspace_id or current_workspace() or DEFAULT_WORKSPACE
+        ws = _dataset_workspace(workspace_id)
         marks = ",".join("?" for _ in wanted)
         async with self._lock:
             rows = self._conn.execute(
@@ -1018,8 +1034,12 @@ class PostgresArtifactStore:
         pool = await self._pool()
         async with pool.acquire() as conn:
             async with conn.transaction():
-                # See the sqlite twin: the no-op compares with this workspace's
-                # head; the next number is the name's.
+                # One registration per name at a time (held to commit), so two
+                # concurrent writers never compute the same next number. See the
+                # sqlite twin: the no-op compares with this workspace's head; the
+                # next number is the name's.
+                await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                                   f"cairn.dataset_versions:{name}")
                 last = await conn.fetchrow(
                     "SELECT version FROM dataset_versions WHERE name=$1 "
                     "ORDER BY version DESC LIMIT 1 FOR UPDATE", name)
@@ -1034,10 +1054,10 @@ class PostgresArtifactStore:
                         "parent_version=$4, split_policy=$5::jsonb, "
                         "dated_at=COALESCE($6, dated_at), origin=COALESCE($7, origin), "
                         "origin_detail=COALESCE($8::jsonb, origin_detail) "
-                        "WHERE name=$9 AND version=$10",
+                        "WHERE name=$9 AND version=$10 AND workspace_id=$11",
                         role, schema, mapping_json, parent_version or "", policy_json,
                         dated, origin, detail_json,
-                        name, int(head["version"]))
+                        name, int(head["version"]), ws)
                     return int(head["version"])
                 version = (int(last["version"]) + 1) if last else 1
                 await conn.execute(
@@ -1106,7 +1126,7 @@ class PostgresArtifactStore:
         if not wanted:
             return []
         await self.ensure_schema()
-        ws = workspace_id or current_workspace() or DEFAULT_WORKSPACE
+        ws = _dataset_workspace(workspace_id)
         pool = await self._pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(

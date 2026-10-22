@@ -600,11 +600,13 @@ async def _stamp_intake_verdict(artifact_store, name: str, version: int, flow_st
     if setter is None:
         return
     from cairn.core.intake import verdict_from_flow_stats  # noqa: PLC0415 — off the hot import path
+    from cairn.core.workspace import scoped_workspace  # noqa: PLC0415 — off the hot import path
 
     try:
         verdict = verdict_from_flow_stats(flow_stats)
         await setter(name, int(version), verdict=verdict.verdict,
-                     reasons=verdict.reasons, report=verdict.report)
+                     reasons=verdict.reasons, report=verdict.report,
+                     workspace_id=scoped_workspace())
     except Exception:  # noqa: BLE001 — see the docstring: never fail a landed dataset over this
         logger.warning("could not stamp the intake verdict on %s@%s", name, version, exc_info=True)
     else:

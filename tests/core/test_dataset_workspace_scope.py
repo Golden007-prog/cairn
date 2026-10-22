@@ -54,8 +54,8 @@ async def store(monkeypatch):
 
 
 def _legacy_row(s: SqliteArtifactStore, name: str, version: int, artifact_id: str, ws: str) -> None:
-    """A row written before names were held per workspace (another workspace's
-    version appended under a name it did not hold)."""
+    """Write another workspace's version of ``name`` directly, at a chosen number
+    (as rows written before this change, or by another writer, may sit)."""
     s._conn.execute(
         "INSERT INTO dataset_versions (name, version, artifact_id, created_at, created_by, workspace_id) "
         "VALUES (?,?,?,?,?,?)", (name, version, artifact_id, "2026-01-01T00:00:00+00:00", "legacy", ws))
@@ -210,6 +210,70 @@ async def test_reregistration_compares_with_the_workspaces_own_head(store):
     assert rows == {4: "default", 2: "default", 1: "default"}
     with workspace_scope("ws-b"):
         assert [v["version"] for v in await store.list_dataset_versions("facts")] == [5, 3]
+
+
+async def test_reregistering_the_head_changes_only_the_workspaces_own_row(store):
+    """The identical-bytes no-op updates the declaration of the registering
+    workspace's own head and nothing of another workspace's version."""
+    store._conn.execute(
+        "INSERT INTO dataset_versions (name, version, artifact_id, created_at, created_by, "
+        "workspace_id, role, parent_version, split_policy) VALUES (?,?,?,?,?,?,?,?,?)",
+        ("facts", 3, "hash-x", "2026-01-01T00:00:00+00:00", "w", "ws-b", "test",
+         "dataset:src@1", '{"seed": 1}'))
+    store._conn.commit()
+    assert await store.register_dataset_version(
+        "facts", "hash-a2", role="validation", parent_version="dataset:other@9",
+        split_policy={"seed": 99}) == 2
+    with workspace_scope("ws-b"):
+        theirs = await store.get_dataset_version_meta("facts", 3)
+    assert (theirs["role"], theirs["parent_version"], theirs["split_policy"]) == (
+        "test", "dataset:src@1", {"seed": 1})
+    mine = await store.get_dataset_version_meta("facts", 2)
+    assert (mine["role"], mine["parent_version"], mine["split_policy"]) == (
+        "validation", "dataset:other@9", {"seed": 99})
+    with workspace_scope("ws-b"):
+        assert await store.register_dataset_version("facts", "hash-x", role="validation") == 3
+    assert (await store.get_dataset_version_meta("facts", 2))["parent_version"] == "dataset:other@9"
+
+
+class _RacingConn:
+    """A connection whose first version INSERT finds the number already taken
+    by another process writing the same file."""
+
+    def __init__(self, conn, other) -> None:
+        self._conn, self._other, self.raced = conn, other, 0
+
+    def execute(self, sql, params=()):
+        if sql.lstrip().startswith("INSERT INTO dataset_versions") and not self.raced:
+            self.raced = 1
+            self._other.execute(
+                "INSERT INTO dataset_versions (name, version, artifact_id, created_at, created_by, "
+                "workspace_id) VALUES (?,?,?,?,?,?)",
+                (params[0], params[1], "hash-a1", "2026-01-01T00:00:00+00:00", "other", "ws-c"))
+            self._other.commit()
+        return self._conn.execute(sql, params)
+
+    def __getattr__(self, item):
+        return getattr(self._conn, item)
+
+
+async def test_a_version_number_taken_by_another_process_is_retried(tmp_path):
+    import sqlite3
+
+    path = str(tmp_path / "a.db")
+    s = SqliteArtifactStore(path)
+    await s.register(_desc("hash-a1", "s3://a/1"), producer_run_id="r")
+    await s.register(_desc("hash-x", "s3://x"), producer_run_id="r")
+    assert await s.register_dataset_version("facts", "hash-a1") == 1
+    other = sqlite3.connect(path)
+    s._conn = _RacingConn(s._conn, other)
+    try:
+        assert await s.register_dataset_version("facts", "hash-x") == 3   # 2 went to the other writer
+        assert s._conn.raced == 1
+        assert [v["version"] for v in await s.list_dataset_versions("facts")] == [3, 1]
+    finally:
+        other.close()
+        await s.close()
 
 
 async def test_default_workspace_registration_is_unchanged(store):
