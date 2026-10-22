@@ -66,7 +66,8 @@ warnings and the templates contract's connected-MCP list. A profile-bound backen
 connection (`backends.<field>_connection`) is the deployment's and always resolves
 in `default`. A flow leg's engine target (`dataflow_target` / `ml_target`) is
 looked up in the run's account, so a tenant's flow legs run on targets in its own
-account.
+account. A target bound in the deployment's profile is a deployment connection: a
+tenant's flow leg that names it does not resolve it, and the leg fails.
 
 An operator's declared secrets (`secrets:` in its binding) are resolved in the
 run's account too (ADR-0143). For the deployment they are bridged into the process

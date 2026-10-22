@@ -60,7 +60,7 @@ from cairn.core.runtime.node_events import (
     bound_node_output as _bound_node_output,  # re-exported for tests + back-compat
     node_event_data,
 )
-from cairn.core.workspace import current_workspace, workspace_scope
+from cairn.core.workspace import current_workspace, scoped_workspace, workspace_scope
 
 logger = logging.getLogger("cairn.dispatcher")
 
@@ -1510,15 +1510,19 @@ class RunDispatcher:
         :meth:`run_template`, the no-orphan chokepoint (ADR-0106 D7), on the background
         lane. Returns the pipeline or run id."""
         async def _launch(ref: str, inputs: dict, trigger: dict) -> str:
+            # The launching run's workspace (in scope from its record); with auth on
+            # and none in scope, refused rather than started in the default.
+            ws = scoped_workspace()
             if ref.startswith("pipeline:"):
                 from cairn.core.dispatch.pipeline_bridge import PipelineBridge  # noqa: PLC0415 — cycle
                 from cairn.core.dispatch.pipeline_launch import launch_pipeline  # noqa: PLC0415 — cycle
 
                 bridge = getattr(self, "_pipeline_bridge", None) or PipelineBridge(self)
                 rec = await launch_pipeline(ref, inputs=dict(inputs or {}), bridge=bridge,
-                                            trigger=dict(trigger or {}))
+                                            workspace_id=ws, trigger=dict(trigger or {}))
                 return str(rec.pipeline_id)
-            run = await self.run_template(ref, dict(inputs or {}), lane="background")
+            with workspace_scope(ws):
+                run = await self.run_template(ref, dict(inputs or {}), lane="background")
             return str(run.id)
         return _launch
 

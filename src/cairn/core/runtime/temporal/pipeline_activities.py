@@ -146,6 +146,13 @@ async def _leg_pipeline_record(pstore: Any, pipeline_id: str, step_id: str) -> A
     if rec is None:
         raise ApplicationError(f"pipeline {pipeline_id}: no pipeline record; refusing to run leg "
                                f"{step_id} without its governance", type=RECORD_MISSING, non_retryable=True)
+    from cairn.core.auth_tokens import auth_enabled  # noqa: PLC0415 — engine code stays out of workflow imports
+
+    if not str(getattr(rec, "workspace_id", "") or "").strip() and auth_enabled():
+        # bridge parity: with auth on a record that names no workspace runs nothing —
+        # refused before any run record exists, and retrying cannot fix it
+        raise ApplicationError(f"pipeline {pipeline_id}: record names no workspace; refusing to run "
+                               f"leg {step_id}", type=RECORD_CORRUPT, non_retryable=True)
     return rec
 
 

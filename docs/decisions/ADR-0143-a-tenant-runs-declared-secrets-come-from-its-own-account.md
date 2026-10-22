@@ -42,3 +42,10 @@ the connection is named after maps the logical key to it (`kaggle`: `KEY` → `K
   only. A tenant's credentials live behind its own connections' account-scoped references.
 - Single-node and auth-off deployments, where every workspace belongs to `default`, behave as
   before.
+- With auth on, resolving connections or declared secrets with no workspace in scope (no request
+  and no run scoped from its record, as for a template's operation nodes on a durable runtime's
+  worker) is refused (`WorkspaceScopeRequired`) rather than resolved as the deployment
+  (owner decision 2026-10-22).
+- A tenant run's flow legs do not use engine targets bound in the deployment's profile
+  (`dataflow_target` / `ml_target`): those name deployment connections, so a tenant's flow legs
+  run on targets in its own account (owner decision 2026-10-22).

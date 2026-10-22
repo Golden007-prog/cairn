@@ -71,8 +71,7 @@ def reset_current_workspace(token: Token) -> None:
     _active.reset(token)
 
 
-@contextlib.contextmanager
-def workspace_scope(workspace_id: Optional[str]):
+def workspace_scope(workspace_id: Optional[str]) -> Any:
     """Make ``workspace_id`` the :func:`current_workspace` for the block.
 
     The dispatch layer enters it from a run's RECORD wherever it executes work
@@ -89,11 +88,31 @@ def workspace_scope(workspace_id: Optional[str]):
 
         if auth_enabled():
             raise WorkspaceScopeRequired("the record names no workspace")
+    return _scope(workspace_id)
+
+
+@contextlib.contextmanager
+def _scope(workspace_id: Optional[str]):
     token = set_current_workspace(workspace_id)
     try:
         yield
     finally:
         reset_current_workspace(token)
+
+
+def scoped_workspace() -> str:
+    """The workspace in scope (a request's, or a run's scoped from its record),
+    for work started on its behalf — a launch from inside a run lands where the
+    run is. With nothing in scope: the process default with auth off; with auth
+    on, :class:`WorkspaceScopeRequired`."""
+    ws = _active.get()
+    if ws:
+        return ws
+    from cairn.core.auth_tokens import auth_enabled  # noqa: PLC0415 — keep the import graph of this module flat
+
+    if auth_enabled():
+        raise WorkspaceScopeRequired("no workspace in scope to start work in")
+    return current_workspace()
 
 
 def workspace_blob_path(workspace_id: str, *parts: str) -> str:

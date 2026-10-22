@@ -51,7 +51,7 @@ from cairn.core.dispatch.leg_executor import LegOutcome, execute_leg, leg_kind_o
 from cairn.core.dispatch.leg_hooks import FlowLegHooks, flow_leg_record, pipeline_spent_usd
 from cairn.core.dispatch.pipeline_resume import plan_resume
 from cairn.core.dispatch.target_concurrency import in_flight_on_target, target_cap
-from cairn.core.workspace import workspace_scope
+from cairn.core.workspace import WorkspaceScopeRequired, workspace_scope
 from cairn.core.engine.pipeline_gate import GATE_STATUS, gate_context_for
 # #1791 — the approval-notification subscriber. Core→core; `gate_notify` pulls
 # the profile and the notifier registry lazily, so this adds no import weight.
@@ -334,10 +334,20 @@ def _in_record_workspace(method):
 
     @functools.wraps(method)
     async def wrapper(self: Any, rec: Any, *args: Any, **kwargs: Any) -> Any:
-        with workspace_scope(getattr(rec, "workspace_id", "") or ""):
+        try:
+            scope = workspace_scope(getattr(rec, "workspace_id", "") or "")
+        except WorkspaceScopeRequired:
+            # auth on and the record names no workspace: fail closed AND visibly —
+            # the leg or the pipeline ends failed with the reason, nothing runs.
+            await self._refuse_unscoped(method.__name__, rec, *args)
+            return None
+        with scope:
             return await method(self, rec, *args, **kwargs)
 
     return wrapper
+
+
+_NO_WORKSPACE_REASON = "record names no workspace"
 
 
 class PipelineBridge:
@@ -1530,6 +1540,25 @@ class PipelineBridge:
             else:
                 await self._submit_step(rec, s, outputs, after_restart=after_restart)
         await self._settle(rec)
+
+    async def _refuse_unscoped(self, method: str, rec: PipelineRecord, s: Any, *rest: Any) -> None:
+        """The visible half of :func:`_in_record_workspace`'s refusal. A step about
+        to be submitted fails its pipeline (audited, as a wire that cannot resolve
+        does); a leg already created marks its run failed and emits the terminal
+        event its pipeline advances on."""
+        if method == "_submit_step":
+            await self._audit(rec, s.id, "workspace_unresolved", {"error": _NO_WORKSPACE_REASON})
+            await self._fail_pipeline(rec, _NO_WORKSPACE_REASON)
+            return
+        run = rest[0]
+        try:
+            await self.dispatcher.store.update(run.id, status="failed", ended_at=_now(),
+                                               error=_NO_WORKSPACE_REASON)
+            await self.dispatcher._emit(
+                run.id, "failed", {"leg": s.ref, "step_id": s.id, "error": _NO_WORKSPACE_REASON},
+                pipeline_id=rec.pipeline_id)
+        except Exception:  # noqa: BLE001 — nothing left to do but log
+            logger.exception("leg %s (%s): failed to terminalize", s.ref, run.id)
 
     @_in_record_workspace
     async def _submit_step(self, rec: PipelineRecord, s: Any, outputs: dict, *,

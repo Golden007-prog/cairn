@@ -937,8 +937,10 @@ async def resolve_connection_obj(conn: Connection) -> Optional[ResolvedConnectio
 async def run_account() -> str:
     """The account the current run resolves connections in: the owner of
     :func:`~cairn.core.workspace.current_workspace` (the dispatch layer scopes it
-    from the run's record). ``default`` — the deployment — for a single-node or
-    auth-off deployment, a CLI process, or any context with no workspace."""
+    from the run's record). With auth off, ``default`` — the deployment — for any
+    context with no workspace in scope. With auth on, no workspace in scope is
+    refused (:class:`~cairn.core.workspace.WorkspaceScopeRequired`), as is a
+    workspace no store holds; the deployment's own tools pass ``account_id``."""
     from cairn.core.workspace import workspace_account  # noqa: PLC0415 — lazy: keep this module import-light
 
     return await workspace_account()

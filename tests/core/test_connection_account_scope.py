@@ -129,12 +129,19 @@ async def test_auth_on_a_record_with_no_workspace_is_refused(world, monkeypatch)
             pass
 
     class Probe:
+        refused: list = []
+        ran: list = []
+
+        async def _refuse_unscoped(self, method, rec, *args):
+            self.refused.append(method)
+
         @_in_record_workspace
         async def leg(self, rec):
-            return await resolve_connection("gpu")
+            self.ran.append(await resolve_connection("gpu"))
 
-    with pytest.raises(workspace.WorkspaceScopeRequired):
-        await Probe().leg(SimpleNamespace(workspace_id=""))
+    probe = Probe()
+    assert await probe.leg(SimpleNamespace(workspace_id="")) is None
+    assert probe.refused == ["leg"] and probe.ran == []      # refused visibly, nothing resolved
 
 
 def test_workspace_scope_restores_the_outer_workspace():
@@ -695,3 +702,201 @@ async def test_profile_bound_backend_connection_is_always_the_deployments(world,
         assert "QDRANT_URL" not in os.environ
     finally:
         bc.reset_applied()
+
+
+# ── launches from inside a run ────────────────────────────────────────
+
+
+async def test_a_launch_from_a_tenant_run_lands_in_the_runs_workspace(world, monkeypatch):
+    import cairn.core.dispatch.pipeline_launch as PLN
+    from cairn.core.dispatch.dispatcher import RunDispatcher
+    from cairn.core.engine.schema import TriggerEvent
+    from cairn.core.operator.runtime import _LAUNCH
+    from cairn.core.storage.protocols import Run
+
+    launched: dict = {}
+
+    async def _launch_pipeline(ref, **kw):
+        launched["pipeline_ws"] = kw.get("workspace_id")
+        return SimpleNamespace(pipeline_id="p-new")
+
+    monkeypatch.setattr(PLN, "launch_pipeline", _launch_pipeline)
+    seen: dict = {}
+    _stub_template(monkeypatch, seen)
+
+    import cairn.core.engine.runner as R
+
+    async def _run(compiled, inputs):        # the operator calling ctx.launch mid-run
+        handle = _LAUNCH.get()
+        launched["pid"] = await handle("pipeline:demo/p", {}, {})
+        return {"output": "ok"}
+
+    monkeypatch.setattr(R, "run_within_budget", _run)
+    inv = Run(id="r-a", trigger=TriggerEvent(source="manual"), workspace_id="ws-a")
+    disp = RunDispatcher(runner=object(), store=_RunStore())
+    with workspace_scope("default"):
+        await disp._run_template_task(inv, "demo/tmpl", {}, None)
+    assert launched == {"pipeline_ws": "ws-a", "pid": "p-new"}
+
+
+async def test_a_template_launched_from_a_tenant_run_is_stamped_with_its_workspace(world, monkeypatch):
+    from cairn.core.dispatch.dispatcher import RunDispatcher
+
+    disp = RunDispatcher(runner=object(), store=_RunStore())
+    stamped: list = []
+
+    async def _run_template(ref, inputs, **kw):
+        stamped.append(current_workspace())
+        return SimpleNamespace(id="r-new")
+
+    monkeypatch.setattr(disp, "run_template", _run_template)
+    with workspace_scope("ws-a"):
+        assert await disp.launch_handle()("demo/other", {}, {}) == "r-new"
+    assert stamped == ["ws-a"]
+
+
+async def test_auth_on_a_launch_with_no_workspace_in_scope_is_refused(world, monkeypatch):
+    import cairn.core.dispatch.pipeline_launch as PLN
+    from cairn.core.dispatch.dispatcher import RunDispatcher
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    called: list = []
+
+    async def _launch_pipeline(ref, **kw):
+        called.append(kw)
+        return SimpleNamespace(pipeline_id="p-new")
+
+    monkeypatch.setattr(PLN, "launch_pipeline", _launch_pipeline)
+    disp = RunDispatcher(runner=object(), store=_RunStore())
+    with pytest.raises(workspace.WorkspaceScopeRequired):
+        await disp.launch_handle()("pipeline:demo/p", {}, {})
+    assert called == []
+
+
+# ── auth on: a record with no workspace fails visibly ─────────────────
+
+
+async def test_auth_on_a_step_whose_record_names_no_workspace_fails_its_pipeline(world, monkeypatch):
+    from cairn.core.dispatch.pipeline_bridge import PipelineBridge
+    from cairn.core.storage.pipeline_store import PipelineRecord
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    audited: list = []
+
+    async def _audit(self, rec, step_id, event, detail):
+        audited.append((step_id, event, detail))
+
+    monkeypatch.setattr(PipelineBridge, "_audit", _audit)
+    runs = _RunStore()
+    bridge = _bridge(runs)
+    rec = PipelineRecord(pipeline_id="p1", workspace_id="")
+    await bridge._submit_step(rec, SimpleNamespace(id="s1", ref="task:x"), {})
+    assert rec.status == "failed"
+    assert rec.trigger["failure_reason"] == "record names no workspace"
+    assert ("s1", "workspace_unresolved", {"error": "record names no workspace"}) in audited
+    assert runs.updates == []                               # nothing was submitted
+
+
+async def test_auth_on_a_leg_whose_record_names_no_workspace_is_marked_failed(world, monkeypatch):
+    from cairn.core.dispatch.pipeline_bridge import PipelineBridge
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    ran: list = []
+
+    async def _op(self, *a, **kw):
+        ran.append(a)
+        return {}
+
+    monkeypatch.setattr(PipelineBridge, "_invoke_task_op", _op)
+    emitted: list = []
+
+    async def _emit(run_id, type, data, **kw):
+        emitted.append((run_id, type, data))
+
+    from cairn.core.dispatch.pipeline_bridge import PipelineBridge as PB
+    from cairn.core.storage.pipeline_store import InMemoryPipelineStore
+
+    runs = _RunStore()
+    bridge = PB(SimpleNamespace(store=runs, _emit=_emit), store=InMemoryPipelineStore())
+    rec = SimpleNamespace(workspace_id="", pipeline_id="p1")
+    s = SimpleNamespace(ref="task:x", id="s1", timeout_s=None)
+    await bridge._run_task_leg(rec, s, SimpleNamespace(id="r1"), {})
+    await bridge._run_flow_leg(rec, s, SimpleNamespace(id="r2", status="running"), {})
+    assert ran == []
+    assert [(r, u["status"], u["error"]) for r, u in runs.updates] == [
+        ("r1", "failed", "record names no workspace"), ("r2", "failed", "record names no workspace")]
+    assert [(r, t) for r, t, _ in emitted] == [("r1", "failed"), ("r2", "failed")]
+
+
+async def test_auth_on_temporal_legs_whose_record_names_no_workspace_are_refused(world, monkeypatch):
+    pytest.importorskip("temporalio")
+    from temporalio.exceptions import ApplicationError
+    from temporalio.testing import ActivityEnvironment
+
+    import cairn.core.runtime.temporal.pipeline_activities as PA
+    from cairn.core.storage.pipeline_store import InMemoryPipelineStore, PipelineRecord
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    pstore = InMemoryPipelineStore()
+    await pstore.put(PipelineRecord(pipeline_id="p1", workspace_id=""))
+    monkeypatch.setattr("cairn.core.storage.pipeline_store.default_pipeline_store", lambda: pstore)
+    runs = _RunStore()
+    created: list = []
+
+    async def _create(run):
+        created.append(run)
+        return run
+
+    runs.create = _create
+    called: list = []
+
+    async def _run_template(ref, inputs, **kw):
+        called.append(ref)
+        return SimpleNamespace(id="run-1")
+
+    async def _emit(*a, **kw):
+        return None
+
+    monkeypatch.setattr(PA, "_dispatcher", lambda: SimpleNamespace(run_template=_run_template, store=runs,
+                                                                   _emit=_emit))
+    for ref in ("demo/tmpl", "flow:demo"):
+        with pytest.raises(ApplicationError) as e:
+            await ActivityEnvironment().run(PA.pipeline_submit_step, ref, {}, "p1", "s1", None, {})
+        assert e.value.non_retryable and "names no workspace" in str(e.value)
+    assert called == [] and created == []
+
+
+async def test_auth_on_job_control_refuses_a_job_with_no_workspace(world, monkeypatch):
+    from cairn.core.operator.job_control import build_default_poll
+    from cairn.core.operator.job_store import RemoteJobRecord
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    polled: list = []
+
+    class StubOp:
+        name = "stub/gpu"
+        input_schema = _Inp
+        output_schema = _Out
+
+        async def poll(self, handle, inp, ctx):
+            polled.append(ctx)
+
+    poll = build_default_poll(SimpleNamespace(get=lambda name: StubOp))
+    with pytest.raises(workspace.WorkspaceScopeRequired):
+        await poll(RemoteJobRecord(run_id="r", workspace_id="", node_name="n", provider="stub/gpu",
+                                   job_id="j", compute_target="gpu"))
+    assert polled == []
+
+
+# ── the deployment's CLI ──────────────────────────────────────────────
+
+
+async def test_compute_status_cli_reads_the_deployments_box_with_auth_on(world, monkeypatch):
+    from cairn.cli.commands import compute
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    assert workspace._active.get() is None                  # a CLI process: no workspace in scope
+    row = await compute._status("gpu")
+    assert row["host"] == "deploy-host"
+    with pytest.raises(Exception, match="did not resolve"):
+        await compute._status("a-box")                      # a tenant's box is not the deployment's
