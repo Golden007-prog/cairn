@@ -267,6 +267,10 @@ _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 #: (method, path) → why this write route does not assert the workspace.
 EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/token"): "public: the login itself; no workspace yet",
+    ("POST", "/auth/refresh"):
+        "public: renews a sign-in from its refresh cookie; acts in no workspace (ADR-0142)",
+    ("POST", "/auth/logout"):
+        "public: revokes the refresh cookie's sign-in; acts in no workspace (ADR-0142)",
     ("POST", "/auth/signup"): "public: creates an account, acts in no workspace",
     ("POST", "/auth/accept-invite"): "public: the invite token is the credential; joins an account",
     ("POST", "/workspaces"): "account-level: creates a workspace for the caller's account",

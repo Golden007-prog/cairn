@@ -28,6 +28,19 @@ cairn remote login -e https://cairn.example.com -u admin
 Sign-up and `cairn remote hash-password` hash passwords with argon2, which the base install
 carries (since 0.1.2; on 0.1.1 install the `auth` extra).
 
+A console sign-in lasts longer than its access token (30 minutes,
+`CAIRN_ACCESS_TOKEN_EXPIRE_MINUTES`). Signing in, signing up or signing in with
+GitHub or Google also sets an httpOnly `cairn_refresh` cookie, and the console
+trades it for a new access token with `POST /auth/refresh`. A remembered sign-in
+lasts `CAIRN_REFRESH_TOKEN_DAYS` (default 30); `POST /token` with
+`remember=false` gives a browser-session cookie the server honours for 12 hours.
+A sign-in's lifetime is fixed when it starts; refreshing does not extend it.
+`POST /auth/logout` ends the sign-in on the server (like a refresh, it needs the
+`X-Cairn-Refresh: 1` header and must come from the console's own origin). Changing a user's password or
+disabling them ends all their sign-ins. Set `CAIRN_PUBLIC_URL` to the address
+people use: the cookie is `Secure` when it is https, and a refresh is accepted
+only from that origin or the host the request was sent to.
+
 ## 2. Create the first account
 
 People other than the configured admin sign up through the API:

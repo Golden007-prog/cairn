@@ -16,6 +16,7 @@ Env knobs
 ``CAIRN_JWT_SECRET``                   HS256 signing secret; *its presence enables auth*.
 ``CAIRN_JWT_ALGORITHM``                default ``"HS256"``.
 ``CAIRN_ACCESS_TOKEN_EXPIRE_MINUTES``  default ``30``.
+``CAIRN_REFRESH_TOKEN_DAYS``           default ``30``: a remembered console sign-in (ADR-0142).
 ``CAIRN_API_USER``                     admin username (default ``"admin"``).
 ``CAIRN_API_PASSWORD_HASH``            argon2 hash of the admin password (preferred).
 ``CAIRN_API_PASSWORD``                 plaintext admin password (dev fallback; hashed in memory).
@@ -33,8 +34,9 @@ import os
 import re
 import time
 from typing import Annotated, Any, Optional
+from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
@@ -77,6 +79,10 @@ _OPEN_PATHS = frozenset({
     # own single-use `state` (`AuthlibBroker.complete_authorization` pops it or
     # refuses), the same posture as a signature-checked webhook.
     "/oauth/callback",
+    # ADR-0142 — renewing and ending a console sign-in. The caller's access token
+    # has typically expired; the credential is the httpOnly refresh cookie (plus,
+    # on both routes, the same-origin check and the X-Cairn-Refresh header).
+    "/auth/refresh", "/auth/logout",
 })
 
 #: #1612 — the invite PREVIEW is a prefix route (`/auth/invite/{token}`), so it
@@ -689,6 +695,192 @@ async def require_admin(token: Annotated[Optional[str], Depends(_oauth2_scheme)]
 # ─── FastAPI wiring ────────────────────────────────────────────────
 
 
+def identity_claims(sub: str, account_id: Optional[str]) -> dict[str, Any]:
+    """The claims a console sign-in's access token carries: ``sub`` (a user id,
+    or the env admin's name) and, when known, ``account_id`` (ADR-0054). One
+    builder for ``POST /token``, sign-up, the Google/GitHub landing and
+    ``POST /auth/refresh`` (ADR-0142), so a renewed token is the one a password
+    sign-in would issue."""
+    claims: dict[str, Any] = {"sub": sub}
+    if account_id:
+        claims["account_id"] = account_id
+    return claims
+
+
+#: ADR-0142 — the refresh cookie: an opaque random token, httpOnly, SameSite=Strict,
+#: sent only to ``/auth/*`` (``/auth/refresh`` and ``/auth/logout`` read it).
+REFRESH_COOKIE = "cairn_refresh"
+REFRESH_COOKIE_PATH = "/auth"
+#: The header ``POST /auth/refresh`` and ``POST /auth/logout`` require. A cross-site
+#: form or navigation cannot set a custom header, so this and the same-origin check
+#: are the CSRF guard.
+REFRESH_HEADER = "X-Cairn-Refresh"
+
+
+def _public_base(request: Request) -> str:
+    """``CAIRN_PUBLIC_URL`` when set, else the URL this request arrived on: the
+    same base the Google/GitHub sign-in builds its callback from."""
+    return (getenv("CAIRN_PUBLIC_URL", "").strip() or str(request.base_url)).rstrip("/")
+
+
+def _cookie_secure(request: Request) -> bool:
+    """Secure exactly as the sign-in state cookie is (``accounts.py``): when the
+    deployment's public base is https. Plain-http local dev gets a cookie the
+    browser will send back over http."""
+    return _public_base(request).startswith("https://")
+
+
+def set_refresh_cookie(response: Response, request: Request, raw: str, row: Any) -> None:
+    """Set the refresh cookie. A remembered sign-in persists until its family
+    expires (``Max-Age``); one that is not remembered is a session cookie."""
+    max_age = max(1, row.seconds_left()) if row.remember else None
+    response.set_cookie(REFRESH_COOKIE, raw, max_age=max_age, path=REFRESH_COOKIE_PATH,
+                        httponly=True, secure=_cookie_secure(request), samesite="strict")
+
+
+def clear_refresh_cookie(response: Response, request: Request) -> None:
+    response.delete_cookie(REFRESH_COOKIE, path=REFRESH_COOKIE_PATH, httponly=True,
+                           secure=_cookie_secure(request), samesite="strict")
+
+
+async def issue_refresh_cookie(response: Response, request: Request, sub: str,
+                               account_id: Optional[str], *, remember: bool = True) -> None:
+    """Start a refresh-token family for a console sign-in and set its cookie
+    (ADR-0142). No-op with auth off. Best effort: the access token in the body is
+    the sign-in, so a store failure logs and leaves the response without a
+    cookie (the console then signs in again when the access token expires)."""
+    if not auth_enabled():
+        return
+    from cairn.core import refresh_tokens  # noqa: PLC0415 — keep the store off the hot import path
+
+    try:
+        raw, row = await refresh_tokens.issue(sub, account_id, remember=remember)
+    except Exception:  # noqa: BLE001 — see docstring
+        logger.warning("could not issue a refresh token for sub=%s; no refresh cookie set",
+                       sub, exc_info=True)
+        return
+    set_refresh_cookie(response, request, raw, row)
+
+
+def _same_origin(request: Request) -> bool:
+    """Whether the request's ``Origin`` (else ``Referer``) names this server: the
+    ``Host`` it was sent to, or ``CAIRN_PUBLIC_URL``'s host. Neither header, or
+    ``Origin: null``, is not same-origin."""
+    src = request.headers.get("origin") or request.headers.get("referer") or ""
+    if not src or src == "null":
+        return False
+    try:
+        netloc = urlsplit(src).netloc.lower()
+    except ValueError:
+        return False
+    if not netloc:
+        return False
+    allowed = {request.headers.get("host", "").strip().lower()}
+    public = getenv("CAIRN_PUBLIC_URL", "").strip()
+    if public:
+        try:
+            allowed.add(urlsplit(public).netloc.lower())
+        except ValueError:
+            pass
+    allowed.discard("")
+    return netloc in allowed
+
+
+def _require_refresh_request(request: Request) -> None:
+    """The CSRF guard ``/auth/refresh`` and ``/auth/logout`` share: the
+    ``X-Cairn-Refresh: 1`` header and a same-origin ``Origin`` (else ``Referer``).
+    403 otherwise; a 403 leaves the cookie alone."""
+    if request.headers.get(REFRESH_HEADER, "").strip() != "1":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail=f"this request needs the {REFRESH_HEADER}: 1 header")
+    if not _same_origin(request):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="this request must come from this server's own origin")
+
+
+async def _refresh_claims(sub: str) -> Optional[dict[str, Any]]:
+    """The claims to re-mint for ``sub`` if it may still sign in, else ``None``:
+    the env admin while it is still configured, or a store user that exists, is
+    not disabled and is still a member of an account (whose id the claims carry,
+    as ``POST /token`` resolves it). A store error raises: an outage is not a
+    reason to end a sign-in."""
+    if is_env_admin(sub):
+        return identity_claims(sub, "default")
+    from cairn.core import account as _acct  # noqa: PLC0415 — avoids an auth↔account cycle
+
+    store = _acct.get_account_store()
+    user = await store.get_user(sub)
+    if user is None or user.disabled:
+        return None
+    account_id = await store.get_account_for_user(sub)
+    if not account_id:
+        return None
+    return identity_claims(sub, account_id)
+
+
+def _refresh_refused(request: Request, detail: str) -> JSONResponse:
+    resp = JSONResponse({"detail": detail}, status_code=status.HTTP_401_UNAUTHORIZED,
+                        headers={"WWW-Authenticate": "Bearer"})
+    clear_refresh_cookie(resp, request)
+    return resp
+
+
+def _auth_disabled() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="auth is disabled (CAIRN_JWT_SECRET unset) — no token needed",
+    )
+
+
+async def refresh_access_token(request: Request, response: Response) -> Token:
+    """``POST /auth/refresh`` — trade the refresh cookie for a new access token
+    and a new cookie (ADR-0142).
+
+    Requires ``X-Cairn-Refresh: 1`` and an ``Origin`` (else ``Referer``) naming
+    this server; 403 otherwise (cookie untouched). A token that was already
+    rotated revokes its whole family. Every 401 refusal clears the cookie; a 403
+    or 400 does not."""
+    from cairn.core import refresh_tokens  # noqa: PLC0415
+
+    if not auth_enabled():
+        raise _auth_disabled()
+    _require_refresh_request(request)
+    raw = request.cookies.get(REFRESH_COOKIE, "")
+    if not raw:
+        return _refresh_refused(request, "no refresh cookie — sign in")
+    try:
+        row = await refresh_tokens.validate(raw)
+        claims = await _refresh_claims(row.sub)
+        if claims is None:
+            await refresh_tokens.revoke_family(row, reason="user can no longer sign in")
+            raise refresh_tokens.RefreshError("inactive")
+        new_raw, new_row = await refresh_tokens.rotate(row)
+    except refresh_tokens.RefreshError as e:
+        return _refresh_refused(request, f"refresh token {e.reason} — sign in")
+    set_refresh_cookie(response, request, new_raw, new_row)
+    return Token(access_token=create_access_token(claims))
+
+
+async def logout(request: Request) -> Response:
+    """``POST /auth/logout`` — revoke the refresh cookie's family and clear the
+    cookie (ADR-0142). Same CSRF guard as ``/auth/refresh`` (the header and a
+    same-origin ``Origin``/``Referer``; 403 otherwise). 204 whether or not the
+    cookie named a live sign-in, so it is idempotent; needs no access token. The
+    access token already issued stays valid until it expires (at most
+    ``CAIRN_ACCESS_TOKEN_EXPIRE_MINUTES``)."""
+    from cairn.core import refresh_tokens  # noqa: PLC0415
+
+    if not auth_enabled():
+        raise _auth_disabled()
+    _require_refresh_request(request)
+    raw = request.cookies.get(REFRESH_COOKIE, "")
+    if raw:
+        await refresh_tokens.revoke_family_of(raw)
+    resp = Response(status_code=status.HTTP_204_NO_CONTENT)
+    clear_refresh_cookie(resp, request)
+    return resp
+
+
 #: Failed-login throttle (#1507). `POST /token` had no lockout, so an open port
 #: was an offline-speed password oracle. Keyed by (client-ip, username) so one
 #: attacker cannot lock every account out by guessing at it — the classic
@@ -734,9 +926,16 @@ def _clear_login_failures(key: tuple[str, str]) -> None:
 
 async def login_for_access_token(
     request: Request,
+    response: Response,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+    remember: Annotated[bool, Form()] = True,
 ) -> Token:
     """``POST /token`` — verify admin credentials, return a signed JWT.
+
+    Also sets the refresh cookie (ADR-0142): ``remember`` (default true) keeps
+    the sign-in for ``CAIRN_REFRESH_TOKEN_DAYS``; false makes it a session cookie
+    that the server honours for 12 hours. The body is unchanged, and a client
+    that ignores cookies (``cairn remote login``) is unaffected.
 
     Module-level (not nested in ``install_auth``) so FastAPI can resolve the
     ``Annotated[..., Depends()]`` dependency against this module's globals — a
@@ -744,10 +943,7 @@ async def login_for_access_token(
     form then mis-parses as a query param (422).
     """
     if not auth_enabled():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="auth is disabled (CAIRN_JWT_SECRET unset) — no token needed",
-        )
+        raise _auth_disabled()
     # An admin can be configured via env OR live only in the user store (ADR-0054).
     # Only refuse when NEITHER source can possibly authenticate anyone.
     if _configured_user() is None and not await _user_store_populated_async():
@@ -776,10 +972,8 @@ async def login_for_access_token(
         )
     _clear_login_failures(key)
     # JWT: `sub` = user id (or admin username); `account_id` = the resolved tenant.
-    claims: dict[str, Any] = {"sub": ident.sub}
-    if ident.account_id:
-        claims["account_id"] = ident.account_id
-    return Token(access_token=create_access_token(claims))
+    await issue_refresh_cookie(response, request, ident.sub, ident.account_id, remember=remember)
+    return Token(access_token=create_access_token(identity_claims(ident.sub, ident.account_id)))
 
 
 def install_auth(app: FastAPI) -> None:
@@ -807,6 +1001,9 @@ def install_auth(app: FastAPI) -> None:
         )
 
     app.post("/token", response_model=Token, tags=["auth"])(login_for_access_token)
+    app.post("/auth/refresh", response_model=Token, tags=["auth"])(refresh_access_token)
+    app.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT, response_class=Response,
+             tags=["auth"])(logout)
 
     @app.exception_handler(PasswordHashingUnavailable)
     async def _no_auth_extra(request: Request, exc: PasswordHashingUnavailable) -> JSONResponse:
