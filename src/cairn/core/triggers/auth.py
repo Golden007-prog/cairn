@@ -81,7 +81,7 @@ _OPEN_PATHS = frozenset({
     "/oauth/callback",
     # ADR-0142 — renewing and ending a console sign-in. The caller's access token
     # has typically expired; the credential is the httpOnly refresh cookie (plus,
-    # for a refresh, the same-origin check and the X-Cairn-Refresh header).
+    # on both routes, the same-origin check and the X-Cairn-Refresh header).
     "/auth/refresh", "/auth/logout",
 })
 

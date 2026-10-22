@@ -18,7 +18,7 @@ live in `deploy/light/README.md`; connections in `docs/connections.md`.
 SHA-256 (`src/cairn/core/refresh_tokens.py`). `POST /auth/refresh` needs `X-Cairn-Refresh: 1`
 and a same-origin `Origin`/`Referer`, rotates the token, and revokes the whole family when a
 rotated token comes back; `POST /auth/logout` (same header and origin check), a password
-change and disabling a user revoke
+change and disabling a user revoke the user's families
 (`triggers/auth.py`, `account.py`). An issued access token stays valid until it expires, and
 rotating `CAIRN_JWT_SECRET` does not end refresh families.
 
