@@ -34,6 +34,20 @@ ref fails the leg at launch (`KeyError`). The consuming kernel strips the fragme
 `cairn/operators/official/dataset_checks/src/operator_dataset_checks/dataflow_stages.py:70-85`);
 `file://` and `file:/` forms are local paths (`_io.py:54-68`, fixed by #2171).
 
+### Workspace scope
+A ref resolves within one workspace: the run's (scoped from its record), or the one passed
+as `workspace_id`. The name, a pinned `@N` and `@latest` see only that workspace's
+versions; another workspace's version reads as not found, the same as an unknown ref.
+With auth on, resolving outside any workspace scope raises `WorkspaceScopeRequired`.
+The registry's by-name reads (`get_dataset_version`, `list_dataset_versions`,
+`get_dataset_version_meta`, `list_datasets`) take an optional `workspace_id` and otherwise
+answer in the current workspace; `set_dataset_version_meta` / `set_dataset_version_verdict`
+change only a version of the current workspace. Version numbers are one sequence per name
+(the key is `(name, version)`), so a name belongs to the workspace of its first version:
+registering under a name another workspace holds raises `DatasetNameUnavailable`. A leg
+registers its exports in the run's workspace. Name-level metadata (`set_dataset_meta`) is
+still one row per name for the deployment.
+
 ### Producer → consumer rules
 - A readiness/intake leg's export is described by the engine as an `ArtifactDescriptor`
   and registered control-side (`leg_executor.py:436-459`); a `register:` config on the
