@@ -57,8 +57,9 @@ def test_workspace_corpus_targets_carry_role_and_collection():
                         source_uri="git+https://x/y", role="incident")
     [t] = workspace_corpus_targets([c])
     assert t.role == "incident" and t.name == "runbooks"
-    # collection is embedder-scoped (#512) + slugified (#535): rag_<name>__<fp>
-    assert t.collection.startswith("rag_runbooks__") and t.corpus_id == "ws:prod/runbooks"
+    # collection is embedder-scoped (#512) + slugified (#535), in the corpus's own
+    # workspace (ADR-0062): ws_<workspace>__rag_<name>__<fp>
+    assert t.collection.startswith("ws_prod__rag_runbooks__") and t.corpus_id == "ws:prod/runbooks"
 
 
 @pytest.mark.asyncio
