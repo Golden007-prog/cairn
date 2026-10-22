@@ -283,9 +283,9 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/jobs/claim"):
         "pull lane, not a workspace route; its tenancy gap is tracked as cairn-platform#224",
     ("POST", "/registry/install"):
-        "deployment-level and refused by posture (501, #1545 D2): a pack is process-wide",
+        "deployment-level, the deployment admin only (cairn-platform#223); refused by posture (501, #1545 D2)",
     ("POST", "/registry/uninstall"):
-        "deployment-level: a console-installed pack is process-wide, not a workspace record",
+        "deployment-level, the deployment admin only (cairn-platform#223): a pack is process-wide",
     ("POST", "/pipelines/preview"): "side-effect free: nothing is submitted or recorded",
     ("POST", "/pipelines/preview-config"): "side-effect free: composes the config surface",
     ("POST", "/triggers/scheduled/preview"): "side-effect free: computes the next fire times",

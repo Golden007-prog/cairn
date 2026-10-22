@@ -11,13 +11,13 @@ catalog/install lifecycle, and the versioned installed-workflow records.
 # would be unresolvable in this module's globals when FastAPI builds the
 # OpenAPI schema. Without it, handler annotations bind at def time.
 
-from typing import Any
+from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from cairn.core.refs import ref_key  # ONE ref spelling (#2126)
 from cairn.core.triggers import console_support as support
-from cairn.core.triggers.auth import require_auth
+from cairn.core.triggers.auth import require_admin, require_auth
 from cairn.core.triggers.routers.pipelines import _off_loop  # #2317 listing helper
 
 
@@ -49,8 +49,11 @@ def build_registry_router() -> APIRouter:
         from cairn.core.registry_catalog import load_registry_catalog
         return load_registry_catalog(annotate=True)
 
-    @r.post("/registry/install", dependencies=[Depends(require_auth)])
-    async def registry_install(body: InstallRequest) -> dict[str, Any]:
+    @r.post("/registry/install")
+    async def registry_install(
+        body: InstallRequest,
+        admin: Annotated[Optional[str], Depends(require_admin)],
+    ) -> dict[str, Any]:
         """Install a pack from the registry — **501, by posture** (#1545 D2).
 
         Kept as a door that refuses HONESTLY rather than removed outright: a
@@ -59,6 +62,10 @@ def build_registry_router() -> APIRouter:
         provisional (see #1545). Packs reach production through the image:
         ``cairn pack add`` → CI → rebuild → redeploy.
         """
+        # cairn-platform#223 — a pack is process-wide, so the door is the deployment
+        # admin's alone: with auth on, anyone else gets 403 before any install
+        # record is written. (A comment, not the docstring: that is the OpenAPI text.)
+        support.require_deployment_admin(admin)
         # lazy: keep the installer + catalog off the import path
         from cairn.core.registry_install import (
             PackInstallUnsupportedError,

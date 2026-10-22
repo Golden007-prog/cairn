@@ -31,6 +31,7 @@ from cairn.core.triggers.auth import (  # account-scope the API (#392 p2)
     authenticated_claims,
     caller_identity,
     identity_from_claims,
+    is_env_admin,
     token_run_scope,
 )
 
@@ -349,6 +350,17 @@ async def assert_can_write_workspace(token: Optional[str]) -> str:
     except WorkspaceForbidden:
         raise HTTPException(status_code=403, detail=f"not a member of workspace {ws!r}") from None
     return ws
+
+
+def require_deployment_admin(admin: Optional[str]) -> None:
+    """Refuse a deployment-level action (a pack install or uninstall: process-wide,
+    no account's or workspace's) to anyone but the deployment admin
+    (cairn-platform#223). ``admin`` is what ``require_admin`` returned: ``None``
+    with auth off (keyless dev, unchanged), else an authenticated owner/admin
+    subject. An account's owner or admin is not the deployment's: 403."""
+    if admin is not None and not is_env_admin(admin):
+        raise HTTPException(status_code=403,
+                            detail="a deployment-level action: the deployment admin (CAIRN_API_USER) only")
 
 
 async def writable_workspace(
