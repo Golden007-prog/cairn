@@ -9,8 +9,11 @@ Public surface:
   - ``tool_adapter`` — submodule with capability→LangChain-tool adapters
   - ``slack_post(text, channel=None)`` — fire-and-forget chat notify
   - ``is_configured(server)`` — check whether a named MCP server is reachable
-  - ``mcp_server_spec(config, secrets)`` — kind=mcp Connection config → a
-    MultiServerMCPClient connection spec (ValueError when not MCP-shaped)
+  - ``mcp_server_spec(config, secrets, *, allow_stdio=False,
+    allow_private_network=False)`` — kind=mcp Connection config → a
+    MultiServerMCPClient connection spec (ValueError when not MCP-shaped, or
+    when it would start a process or reach an internal address the caller
+    did not allow)
   - ``discover_tools(name, spec, timeout=…)`` — short-lived session →
     ``tools/list`` → read-only ``[{name, description, inputs, input_schema}]``
     (#355; the schema itself since ADR-0101 D5)
@@ -58,13 +61,27 @@ __all__ = [
 # (the same client cairn.services.mcp.client is built on).
 
 
-def mcp_server_spec(config: dict[str, Any], secrets: dict[str, str] | None = None) -> dict[str, Any]:
+def mcp_server_spec(
+    config: dict[str, Any],
+    secrets: dict[str, str] | None = None,
+    *,
+    allow_stdio: bool = False,
+    allow_private_network: bool = False,
+) -> dict[str, Any]:
     """Normalize a kind=mcp connection ``config`` (+ resolved ``secrets``) into
     a ``MultiServerMCPClient`` connection spec.
 
     Raises ``ValueError`` with a precise message when the config is not
     MCP-shaped — no ``url`` for an http/sse transport, no ``command`` for
     stdio, or an unparseable ``raw_json``.
+
+    Fails closed on where the spec reaches: a ``stdio`` spec runs a command on
+    this server, so it is built only with ``allow_stdio=True``; an http/sse
+    ``url`` must pass the connection probe's address guard
+    (:func:`cairn.core.connection_probe.probe_target_block_reason`: no loopback,
+    link-local, cloud metadata or, unless ``CAIRN_PROBE_ALLOW_PRIVATE``, private
+    address) unless ``allow_private_network=True``. Both are the deployment's
+    call to make, not a tenant connection's.
     """
     cfg = dict(config or {})
     live = {str(k): str(v) for k, v in (secrets or {}).items() if v}
@@ -98,6 +115,12 @@ def mcp_server_spec(config: dict[str, Any], secrets: dict[str, str] | None = Non
     if transport in ("streamable_http", "http", "sse"):
         if not url:
             raise ValueError(f"transport={transport} needs a 'url' in the connection config")
+        if not allow_private_network:
+            from cairn.core.connection_probe import probe_target_block_reason  # lazy: httpx off import path
+
+            blocked = probe_target_block_reason(url)
+            if blocked:
+                raise ValueError(f"MCP server url is not allowed: {blocked}")
         headers = {str(k): str(v) for k, v in (cfg.get("headers") or {}).items()}
         token = live.get("TOKEN") or live.get("BEARER_TOKEN") or live.get("API_KEY")
         if token and "Authorization" not in headers:
@@ -111,6 +134,8 @@ def mcp_server_spec(config: dict[str, Any], secrets: dict[str, str] | None = Non
         return spec
 
     if transport == "stdio":
+        if not allow_stdio:
+            raise ValueError("transport=stdio runs a command on this server and is not allowed for this caller")
         if not command:
             raise ValueError("transport=stdio needs a 'command' in the connection config")
         args = cfg.get("args") or []
