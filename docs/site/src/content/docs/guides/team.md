@@ -34,7 +34,9 @@ GitHub or Google also sets an httpOnly `cairn_refresh` cookie, and the console
 trades it for a new access token with `POST /auth/refresh`. A remembered sign-in
 lasts `CAIRN_REFRESH_TOKEN_DAYS` (default 30); `POST /token` with
 `remember=false` gives a browser-session cookie the server honours for 12 hours.
-`POST /auth/logout` ends the sign-in on the server. Changing a user's password or
+A sign-in's lifetime is fixed when it starts; refreshing does not extend it.
+`POST /auth/logout` ends the sign-in on the server (like a refresh, it needs the
+`X-Cairn-Refresh: 1` header and must come from the console's own origin). Changing a user's password or
 disabling them ends all their sign-ins. Set `CAIRN_PUBLIC_URL` to the address
 people use: the cookie is `Secure` when it is https, and a refresh is accepted
 only from that origin or the host the request was sent to.

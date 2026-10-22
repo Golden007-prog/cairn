@@ -4,14 +4,15 @@ A real app with auth ON and the account, workspace and refresh-token stores in a
 temporary directory. Every sign-in door (``POST /token``, sign-up, the Google
 landing) sets the cookie; ``POST /auth/refresh`` rotates it and refuses reuse,
 expiry, revocation, a cross-origin caller and a missing header; ``POST
-/auth/logout``, a password change and disabling a user revoke it. The store tests
-run against the in-memory and SQLite stores, and against Postgres when
-``PGSTORE_DSN`` is set.
+/auth/logout`` (behind the same header and same-origin check), a password change
+and disabling a user revoke it. The store tests run against the in-memory and
+SQLite stores, and against Postgres when ``PGSTORE_DSN`` is set.
 """
 from __future__ import annotations
 
 import asyncio
 import importlib.util
+import logging
 import os
 import types
 import uuid
@@ -110,6 +111,12 @@ def _refresh(c, raw, headers=REFRESH_HEADERS):
     return c.post("/auth/refresh", headers={**headers, "Cookie": f"{auth.REFRESH_COOKIE}={raw}"})
 
 
+def _logout(c, raw=None, headers=REFRESH_HEADERS):
+    c.cookies.clear()
+    extra = {"Cookie": f"{auth.REFRESH_COOKIE}={raw}"} if raw is not None else {}
+    return c.post("/auth/logout", headers={**headers, **extra})
+
+
 def _row(raw):
     return asyncio.run(RT.default_refresh_token_store().get(RT.hash_token(raw)))
 
@@ -188,14 +195,22 @@ def test_refresh_rotates_and_re_mints_the_same_claims(client):
     assert _refresh(client, new["value"]).status_code == 200, "the new token rotates in turn"
 
 
-def test_reusing_a_rotated_token_revokes_the_whole_family(client):
+def test_reusing_a_rotated_token_revokes_the_whole_family(client, caplog):
     a = _cookie(_login(client))["value"]
     b = _cookie(_refresh(client, a))["value"]
-    reuse = _refresh(client, a)
+    with caplog.at_level(logging.WARNING, logger="cairn.core.refresh_tokens"):
+        reuse = _refresh(client, a)
     assert reuse.status_code == 401 and "reused" in reuse.json()["detail"]
     assert _cleared(reuse)
     assert _row(b).revoked_at, "the live token of the family is revoked too"
     assert _refresh(client, b).status_code == 401
+    # a WARNING names the user and the family prefix, never the token or its hash
+    warned = [r.getMessage() for r in caplog.records
+              if r.levelno == logging.WARNING and r.name == "cairn.core.refresh_tokens"]
+    family = _row(a).family_id
+    assert len(warned) == 1 and "sub=admin" in warned[0] and f"family={family[:8]}" in warned[0]
+    for secret in (a, b, RT.hash_token(a), RT.hash_token(b), family):
+        assert secret not in warned[0]
 
 
 def test_an_expired_token_is_refused(client):
@@ -269,6 +284,7 @@ def test_a_cross_origin_refresh_is_refused(client):
                     {"X-Cairn-Refresh": "1"}):
         r = _refresh(client, raw, headers)
         assert r.status_code == 403, (headers, r.text)
+        assert _no_cookie(r), "a 403 leaves the cookie alone"
     assert _row(raw).used_at is None, "a refused request rotates nothing"
     ok = _refresh(client, raw, {"X-Cairn-Refresh": "1", "Referer": f"{ORIGIN}/console/runs"})
     assert ok.status_code == 200, "a same-origin Referer stands in for Origin"
@@ -288,21 +304,13 @@ def test_a_refresh_without_the_header_is_refused(client):
     assert _row(raw).used_at is None
 
 
-def test_failed_refreshes_hit_the_login_throttle(client):
-    for _ in range(auth._LOGIN_MAX_FAILURES):
-        assert _refresh(client, "guess").status_code == 401
-    r = _refresh(client, "guess")
-    assert r.status_code == 429 and r.headers.get("retry-after")
-
-
 # ─── POST /auth/logout ─────────────────────────────────────────────
 
 
 def test_logout_revokes_the_family_and_clears_the_cookie(client):
     a = _cookie(_login(client))["value"]
     b = _cookie(_refresh(client, a))["value"]
-    client.cookies.clear()
-    r = client.post("/auth/logout", headers={"Cookie": f"{auth.REFRESH_COOKIE}={b}"})
+    r = _logout(client, b)
     assert r.status_code == 204 and _cleared(r)
     assert _row(a).revoked_at and _row(b).revoked_at
     assert _refresh(client, b).status_code == 401
@@ -311,12 +319,23 @@ def test_logout_revokes_the_family_and_clears_the_cookie(client):
 def test_logout_is_idempotent_and_needs_no_access_token(client):
     raw = _cookie(_login(client))["value"]
     for _ in range(2):
-        client.cookies.clear()
-        r = client.post("/auth/logout", headers={"Cookie": f"{auth.REFRESH_COOKIE}={raw}"})
-        assert r.status_code == 204
-    client.cookies.clear()
-    assert client.post("/auth/logout").status_code == 204
-    assert client.post("/auth/logout", headers={"Cookie": f"{auth.REFRESH_COOKIE}=unknown"}).status_code == 204
+        assert _logout(client, raw).status_code == 204
+    assert _logout(client).status_code == 204
+    assert _logout(client, "unknown").status_code == 204
+
+
+def test_logout_needs_the_header_and_the_same_origin(client):
+    raw = _cookie(_login(client))["value"]
+    for headers in ({"Origin": ORIGIN},
+                    {"X-Cairn-Refresh": "1", "Origin": "https://evil.example"},
+                    {"X-Cairn-Refresh": "1", "Referer": "https://evil.example/"},
+                    {"X-Cairn-Refresh": "1"}):
+        r = _logout(client, raw, headers)
+        assert r.status_code == 403, (headers, r.text)
+        assert _no_cookie(r), "a 403 leaves the cookie alone"
+    assert _row(raw).revoked_at is None, "a refused sign-out revokes nothing"
+    assert _logout(client, raw, {"X-Cairn-Refresh": "1", "Referer": f"{ORIGIN}/console"}).status_code == 204
+    assert _row(raw).revoked_at
 
 
 # ─── auth off ──────────────────────────────────────────────────────
@@ -427,6 +446,62 @@ def test_store_parity(store):
         assert await RT.revoke_family_of(raw3, store=store) is True
         assert await RT.revoke_family_of("nope", store=store) is False
         assert await store.get(RT.hash_token("nope")) is None
+    asyncio.run(go())
+
+
+def test_two_concurrent_rotations_of_one_token_one_wins_and_the_family_is_revoked(store):
+    """Two refreshes with the same cookie at once (two tabs, or a stolen copy):
+    the compare-and-set lets exactly one rotate, the other is reuse, and the
+    whole family, the winner's new token included, ends revoked."""
+    async def go():
+        raw, row = await RT.issue(f"user-{uuid.uuid4().hex}", "acme", remember=True, store=store)
+        live = await RT.validate(raw, store=store)
+        results = await asyncio.gather(RT.rotate(live, store=store), RT.rotate(live, store=store),
+                                       return_exceptions=True)
+        won = [r for r in results if not isinstance(r, BaseException)]
+        lost = [r for r in results if isinstance(r, BaseException)]
+        assert len(won) == 1 and len(lost) == 1, results
+        assert isinstance(lost[0], RT.RefreshError) and lost[0].reason == "reused"
+        new_raw, new_row = won[0]
+        assert (await store.get(new_row.token_hash)).revoked_at, "the winner's token is revoked too"
+        assert (await store.get(row.token_hash)).revoked_at
+        with pytest.raises(RT.RefreshError, match="revoked"):
+            await RT.validate(new_raw, store=store)
+    asyncio.run(go())
+
+
+def test_the_winners_token_is_revoked_even_when_the_loser_revokes_first():
+    """The interleaving ``gather`` alone does not force: the winner's
+    compare-and-set succeeds, then the loser fails its own and revokes the family
+    BEFORE the winner continues. The winner's new token must already be in the
+    family by then (written before the compare-and-set), or it survives."""
+    class Paused(RT.InMemoryRefreshTokenStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.revoked = asyncio.Event()
+
+        async def mark_used(self, token_hash, *, at, replaced_by):
+            won = await super().mark_used(token_hash, at=at, replaced_by=replaced_by)
+            if won:  # hold the winner here until the loser has revoked
+                try:
+                    await asyncio.wait_for(self.revoked.wait(), 2)
+                except asyncio.TimeoutError:
+                    pass
+            return won
+
+        async def revoke_family(self, family_id, *, at):
+            n = await super().revoke_family(family_id, at=at)
+            self.revoked.set()
+            return n
+
+    async def go():
+        store = Paused()
+        raw, row = await RT.issue("u-1", "acme", remember=True, store=store)
+        results = await asyncio.gather(RT.rotate(row, store=store), RT.rotate(row, store=store),
+                                       return_exceptions=True)
+        won = [r for r in results if not isinstance(r, BaseException)]
+        assert len(won) == 1, results
+        assert (await store.get(won[0][1].token_hash)).revoked_at, "the winner's token survived"
     asyncio.run(go())
 
 

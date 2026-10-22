@@ -1,6 +1,7 @@
 # ADR-0142 — Renewable console sign-ins: a rotating refresh cookie and server-side sign-out
 
-**Status:** accepted (owner-approved 2026-10-22, "option 1"; target release 0.1.5). Builds on
+**Status:** accepted (owner-approved 2026-10-22, "option 1"; review-round owner decisions the
+same day are marked below; target release 0.1.5). Builds on
 ADR-0054 (accounts and the `sub` / `account_id` claims), ADR-0094 (sign-up) and ADR-0119
 (Google/GitHub sign-in hands the console the same access token as `POST /token`).
 
@@ -23,8 +24,10 @@ SHA-256. No cookie with auth off.
 **D2 — Remember.** `POST /token` takes an optional form field `remember` (default true, so
 existing clients are unchanged). Remembered: the cookie's `Max-Age` and the server expiry are
 `CAIRN_REFRESH_TOKEN_DAYS` (new setting, default 30). Not remembered: a session cookie and a
-fixed 12-hour server expiry. The Google/GitHub landing and sign-up are remembered. A sign-in's
-lifetime is fixed when it starts: rotation does not extend it (implementation choice, below).
+fixed 12-hour server expiry. The Google/GitHub landing and sign-up are remembered.
+**Owner decision (2026-10-22): the lifetime is fixed, not sliding.** A family's expiry is set
+when the sign-in starts and a rotated row inherits it, so refreshing never extends a sign-in; a
+remembered cookie's `Max-Age` after a refresh is the time left.
 
 **D3 — A new store, `refresh_tokens`.** The usual triad (in-memory, SQLite in the shared
 `cairn.db`, Postgres with `PgSchemaInit`) selected by `CAIRN_STORAGE`; no per-store path knob.
@@ -42,13 +45,15 @@ the row used (`UPDATE … WHERE used_at IS NULL AND revoked_at IS NULL`), issues
 the same family, sets the new cookie and returns `{access_token, token_type}` as `/token`
 does, with the claims re-minted by the same builder (`identity_claims`; the account is the
 live membership, as `/token` resolves it). Presenting a token that was already rotated is
-reuse: the whole family is revoked, the cookie cleared, 401. Every refusal clears the cookie.
-Failed refreshes with a cookie count against the existing login throttle for the client
-address (`CAIRN_LOGIN_MAX_FAILURES` / `CAIRN_LOGIN_LOCKOUT_SECONDS`, 429 when locked); a
-request with no cookie is not counted.
+reuse: the whole family is revoked, the cookie cleared, 401. Every 401 refusal clears the
+cookie; a 403 (header or origin) or a 400 (auth off) leaves it alone. Reuse, and revoking a
+family whose user may no longer sign in, log a WARNING naming the user (`sub`) and the first 8
+characters of the family id, never the token or its hash.
 
-**D5 — `POST /auth/logout`** revokes the cookie's family and clears the cookie: 204 whether
-or not the cookie named a live sign-in, and with no access token needed.
+**D5 — `POST /auth/logout`** sits behind the same guard as refresh (one helper: the
+`X-Cairn-Refresh: 1` header and the same-origin check, 403 otherwise), then revokes the
+cookie's family and clears the cookie: 204 whether or not the cookie named a live sign-in, and
+with no access token needed.
 
 **D6 — Revocation on account changes.** `account.set_password` and
 `account.set_disabled(…, True)` revoke every family of the user. The platform's admin routes
@@ -67,7 +72,13 @@ body and ignores the cookie.
   without a cookie (the access token is the sign-in). A store failure while refreshing,
   revoking or signing out is an error, never a silent pass.
 - `/auth/refresh` and `/auth/logout` are public paths in the bearer guard: the credential is
-  the cookie.
+  the cookie. **Owner-approved 2026-10-22:** both are stated exemptions in the write-route
+  workspace guard (`tests/core/test_write_route_workspace_guard.py` `EXEMPT`), like `/token`:
+  they act in no workspace.
+- Rotation writes the next row before the compare-and-set on the presented one. A loser's
+  revocation runs only after the winner's compare-and-set, so it always finds the winner's new
+  row and revokes it too; written after, the winner's row could land behind the revocation and
+  keep the family alive (two concurrent rotations are tested on every backend).
 
 ## Consequences
 - New API: `POST /auth/refresh`, `POST /auth/logout`; `POST /token` gains the `remember` form
@@ -88,4 +99,3 @@ body and ignores the cookie.
 - A store user with no account membership can sign in with `/token` but cannot refresh.
 - The same-origin check compares hosts; a development proxy that rewrites `Host` (for
   example Vite's `changeOrigin`) needs `CAIRN_PUBLIC_URL` set to the browser's origin.
-- The throttle is per process (as the login throttle is).

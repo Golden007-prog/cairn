@@ -36,6 +36,7 @@ from cairn.core.settings import getenv
 
 import asyncio
 import hashlib
+import logging
 import os
 import secrets
 import sqlite3
@@ -47,6 +48,8 @@ from pydantic import BaseModel
 
 from cairn.core import settings
 from cairn.core.pg_schema_init import PgSchemaInit
+
+logger = logging.getLogger(__name__)
 
 #: How long a remembered sign-in lasts unless ``CAIRN_REFRESH_TOKEN_DAYS`` says otherwise.
 DEFAULT_REMEMBER_DAYS = 30
@@ -369,7 +372,7 @@ async def validate(raw: str, *, store: Any = None) -> RefreshToken:
     if row.revoked_at is not None:
         raise RefreshError("revoked")
     if row.used_at is not None:
-        await store.revoke_family(row.family_id, at=_iso(_now()))
+        await revoke_family(row, reason="reuse of a rotated token", store=store)
         raise RefreshError("reused")
     if row.seconds_left() <= 0:
         raise RefreshError("expired")
@@ -380,7 +383,12 @@ async def rotate(row: RefreshToken, *, store: Any = None) -> tuple[str, RefreshT
     """Mark ``row`` used and issue the next token in its family (same expiry).
     If ``row`` was used or revoked in the meantime (a concurrent refresh with the
     same token), that is reuse: the family is revoked and :class:`RefreshError`
-    raised."""
+    raised.
+
+    The next row is written BEFORE the compare-and-set. A loser's revocation
+    runs only after the winner's compare-and-set, so it always finds the
+    winner's new row in place and revokes it too; written after, the winner's
+    row could land behind the revocation and keep the family alive."""
     store = store or default_refresh_token_store()
     now = _iso(_now())
     raw = _new_raw()
@@ -388,17 +396,22 @@ async def rotate(row: RefreshToken, *, store: Any = None) -> tuple[str, RefreshT
         "token_hash": hash_token(raw), "issued_at": now,
         "used_at": None, "replaced_by": None, "revoked_at": None,
     })
-    if not await store.mark_used(row.token_hash, at=now, replaced_by=nxt.token_hash):
-        await store.revoke_family(row.family_id, at=now)
-        raise RefreshError("reused")
     await store.insert(nxt)
+    if not await store.mark_used(row.token_hash, at=now, replaced_by=nxt.token_hash):
+        await revoke_family(row, reason="token used or revoked during the refresh", store=store)
+        raise RefreshError("reused")
     return raw, nxt
 
 
-async def revoke_family(family_id: str, *, store: Any = None) -> int:
-    """Revoke one family (a user who may no longer sign in)."""
+async def revoke_family(row: RefreshToken, *, reason: str, store: Any = None) -> int:
+    """Revoke ``row``'s family because something is wrong (reuse, a user who may
+    no longer sign in), with a WARNING naming the user and the family id's first
+    8 characters: never the token or its hash."""
     store = store or default_refresh_token_store()
-    return await store.revoke_family(family_id, at=_iso(_now()))
+    n = await store.revoke_family(row.family_id, at=_iso(_now()))
+    logger.warning("refresh-token family revoked (%s): sub=%s family=%s…",
+                   reason, row.sub, row.family_id[:8])
+    return n
 
 
 async def revoke_family_of(raw: str, *, store: Any = None) -> bool:
@@ -409,13 +422,16 @@ async def revoke_family_of(raw: str, *, store: Any = None) -> bool:
     if row is None:
         return False
     await store.revoke_family(row.family_id, at=_iso(_now()))
+    logger.info("refresh-token family signed out: sub=%s family=%s…", row.sub, row.family_id[:8])
     return True
 
 
 async def revoke_user(sub: str, *, store: Any = None) -> int:
     """Revoke every family of ``sub`` (a password change, a disabled user)."""
     store = store or default_refresh_token_store()
-    return await store.revoke_subject(sub, at=_iso(_now()))
+    n = await store.revoke_subject(sub, at=_iso(_now()))
+    logger.info("refresh tokens revoked for sub=%s (%d row(s))", sub, n)
+    return n
 
 
 __all__ = [

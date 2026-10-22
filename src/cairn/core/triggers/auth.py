@@ -711,12 +711,10 @@ def identity_claims(sub: str, account_id: Optional[str]) -> dict[str, Any]:
 #: sent only to ``/auth/*`` (``/auth/refresh`` and ``/auth/logout`` read it).
 REFRESH_COOKIE = "cairn_refresh"
 REFRESH_COOKIE_PATH = "/auth"
-#: The header ``POST /auth/refresh`` requires. A cross-site form or navigation
-#: cannot set a custom header, so this and the same-origin check are the CSRF guard.
+#: The header ``POST /auth/refresh`` and ``POST /auth/logout`` require. A cross-site
+#: form or navigation cannot set a custom header, so this and the same-origin check
+#: are the CSRF guard.
 REFRESH_HEADER = "X-Cairn-Refresh"
-#: The login-throttle key for refresh failures from one client. ``_throttle_key``
-#: strips the username, so no login can produce a key with a leading space.
-_REFRESH_THROTTLE_USER = " refresh"
 
 
 def _public_base(request: Request) -> str:
@@ -788,6 +786,18 @@ def _same_origin(request: Request) -> bool:
     return netloc in allowed
 
 
+def _require_refresh_request(request: Request) -> None:
+    """The CSRF guard ``/auth/refresh`` and ``/auth/logout`` share: the
+    ``X-Cairn-Refresh: 1`` header and a same-origin ``Origin`` (else ``Referer``).
+    403 otherwise; a 403 leaves the cookie alone."""
+    if request.headers.get(REFRESH_HEADER, "").strip() != "1":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail=f"this request needs the {REFRESH_HEADER}: 1 header")
+    if not _same_origin(request):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="this request must come from this server's own origin")
+
+
 async def _refresh_claims(sub: str) -> Optional[dict[str, Any]]:
     """The claims to re-mint for ``sub`` if it may still sign in, else ``None``:
     the env admin while it is still configured, or a store user that exists, is
@@ -827,40 +837,25 @@ async def refresh_access_token(request: Request, response: Response) -> Token:
     and a new cookie (ADR-0142).
 
     Requires ``X-Cairn-Refresh: 1`` and an ``Origin`` (else ``Referer``) naming
-    this server; 403 otherwise. Failed attempts count against the login throttle
-    for the client's address (429 once locked). A token that was already rotated
-    revokes its whole family. Every refusal clears the cookie."""
+    this server; 403 otherwise (cookie untouched). A token that was already
+    rotated revokes its whole family. Every 401 refusal clears the cookie; a 403
+    or 400 does not."""
     from cairn.core import refresh_tokens  # noqa: PLC0415
 
     if not auth_enabled():
         raise _auth_disabled()
-    if request.headers.get(REFRESH_HEADER, "").strip() != "1":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                            detail=f"a refresh needs the {REFRESH_HEADER}: 1 header")
-    if not _same_origin(request):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                            detail="a refresh must come from this server's own origin")
-    key = _throttle_key(request, _REFRESH_THROTTLE_USER)
-    retry_after = login_retry_after(key)
-    if retry_after is not None:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="too many failed refresh attempts — try again shortly",
-            headers={"Retry-After": str(retry_after)},
-        )
+    _require_refresh_request(request)
     raw = request.cookies.get(REFRESH_COOKIE, "")
     if not raw:
-        # Not a failed guess: a console with no remembered sign-in asks too.
         return _refresh_refused(request, "no refresh cookie — sign in")
     try:
         row = await refresh_tokens.validate(raw)
         claims = await _refresh_claims(row.sub)
         if claims is None:
-            await refresh_tokens.revoke_family(row.family_id)
+            await refresh_tokens.revoke_family(row, reason="user can no longer sign in")
             raise refresh_tokens.RefreshError("inactive")
         new_raw, new_row = await refresh_tokens.rotate(row)
     except refresh_tokens.RefreshError as e:
-        _record_login_failure(key)
         return _refresh_refused(request, f"refresh token {e.reason} — sign in")
     set_refresh_cookie(response, request, new_raw, new_row)
     return Token(access_token=create_access_token(claims))
@@ -868,13 +863,16 @@ async def refresh_access_token(request: Request, response: Response) -> Token:
 
 async def logout(request: Request) -> Response:
     """``POST /auth/logout`` — revoke the refresh cookie's family and clear the
-    cookie (ADR-0142). 204 whether or not the cookie named a live sign-in, so it
-    is idempotent; needs no access token. The access token already issued stays
-    valid until it expires (at most ``CAIRN_ACCESS_TOKEN_EXPIRE_MINUTES``)."""
+    cookie (ADR-0142). Same CSRF guard as ``/auth/refresh`` (the header and a
+    same-origin ``Origin``/``Referer``; 403 otherwise). 204 whether or not the
+    cookie named a live sign-in, so it is idempotent; needs no access token. The
+    access token already issued stays valid until it expires (at most
+    ``CAIRN_ACCESS_TOKEN_EXPIRE_MINUTES``)."""
     from cairn.core import refresh_tokens  # noqa: PLC0415
 
     if not auth_enabled():
         raise _auth_disabled()
+    _require_refresh_request(request)
     raw = request.cookies.get(REFRESH_COOKIE, "")
     if raw:
         await refresh_tokens.revoke_family_of(raw)
