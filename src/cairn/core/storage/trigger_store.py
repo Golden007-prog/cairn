@@ -26,7 +26,9 @@ from __future__ import annotations
 from cairn.core.settings import getenv
 
 import asyncio
+import functools
 import os
+import threading
 import re
 from typing import Optional
 
@@ -143,6 +145,20 @@ class InMemoryTriggerStore:
         pass
 
 
+def _conn_locked(fn):
+    """#163 — one ``sqlite3`` connection, shared across threads
+    (``check_same_thread=False``): every use holds the store's thread lock. The
+    asyncio lock serializes callers on one event loop only. ``list_sync`` is
+    also called directly from the synchronous router build, and ``close`` can
+    race an in-flight read, so two threads could drive the connection at once,
+    which crashes CPython's sqlite3 module (a segfault, not an exception)."""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        with self._conn_lock:
+            return fn(self, *args, **kwargs)
+    return wrapper
+
+
 class SqliteTriggerStore:
     """Embedded-SQLite store — restart-safe, single file. Mirrors
     :class:`~cairn.core.connections.SqliteConnectionStore`: the full
@@ -162,6 +178,7 @@ class SqliteTriggerStore:
         if path != ":memory:":
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         self.path = path
+        self._conn_lock = threading.RLock()  # #163 — see _conn_locked
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
@@ -192,6 +209,7 @@ class SqliteTriggerStore:
         self._conn.commit()
         self._lock = asyncio.Lock()
 
+    @_conn_locked
     def _create_sync(self, t: StoredTrigger) -> None:
         # #213 — INSERT OR REPLACE drops any row holding this id OR name, whatever
         # its workspace; refuse when that row is another workspace's. The check and the
@@ -216,6 +234,7 @@ class SqliteTriggerStore:
             await asyncio.to_thread(self._create_sync, t)
         return t
 
+    @_conn_locked
     def _get_sync(self, sql: str, params: tuple) -> Optional[StoredTrigger]:
         row = self._conn.execute(sql, params).fetchone()
         return StoredTrigger.model_validate_json(row[0]) if row else None
@@ -236,6 +255,7 @@ class SqliteTriggerStore:
                 self._get_sync, "SELECT data FROM triggers WHERE name=?", (name,)
             )
 
+    @_conn_locked
     def list_sync(self, workspace_id: Optional[str] = None) -> list[StoredTrigger]:
         """Synchronous read for the load/merge path (router build is sync).
         ``workspace_id=None`` → all (the global router); a value → scoped to that
@@ -254,6 +274,7 @@ class SqliteTriggerStore:
         async with self._lock:
             return await asyncio.to_thread(self.list_sync, workspace_id)
 
+    @_conn_locked
     def _delete_sync(self, trigger_id: str, workspace_id: Optional[str]) -> bool:
         if workspace_id is not None:
             cur = self._conn.execute(
@@ -269,6 +290,7 @@ class SqliteTriggerStore:
         async with self._lock:
             return await asyncio.to_thread(self._delete_sync, trigger_id, workspace_id)
 
+    @_conn_locked
     def close(self) -> None:
         self._conn.close()
 
