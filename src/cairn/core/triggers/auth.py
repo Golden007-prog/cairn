@@ -231,6 +231,47 @@ def token_run_scope(claims: dict[str, Any]) -> Optional[str]:
     return claimed or from_sub
 
 
+#: cairn-platform#224 — a **worker-pool token** (``scope=worker-pool``,
+#: ``sub=worker-pool:<name>``, minted by :func:`mint_worker_pool_token` /
+#: ``cairn remote worker-token``) is what a pull worker claims with. It reaches
+#: the pull lane and nothing else: it is a credential for taking work off the
+#: queue, not a user of any account. A token that is also run-scoped is held to
+#: its run (:func:`token_run_scope` wins).
+WORKER_POOL_SCOPE = "worker-pool"
+_WORKER_POOL_SUB_PREFIX = "worker-pool:"
+_WORKER_POOL_ROUTES = (
+    ("POST", re.compile(r"^(?:/workspaces/[^/]+)?/jobs/claim$")),
+    ("POST", re.compile(r"^(?:/workspaces/[^/]+)?/jobs/[^/]+/heartbeat$")),
+)
+#: How long a worker-pool token lives unless its minter says otherwise. A pull
+#: worker runs unattended, so the 30-minute session default would stop it.
+WORKER_POOL_TOKEN_DAYS = 30
+
+
+def is_worker_pool_token(claims: dict[str, Any]) -> bool:
+    """Whether these verified claims are a worker-pool token (and not run-scoped)."""
+    return claims.get("scope") == WORKER_POOL_SCOPE and token_run_scope(claims) is None
+
+
+def mint_worker_pool_token(name: str, days: int = WORKER_POOL_TOKEN_DAYS) -> str:
+    """A worker-pool token named ``name``, valid ``days`` days. Signing it needs
+    the deployment's ``CAIRN_JWT_SECRET``, so only whoever holds the secret (the
+    deployment's operator) can mint one."""
+    from datetime import timedelta  # noqa: PLC0415 — only the minting CLI needs it
+
+    clean = (name or "").strip()
+    if not clean or any(ch.isspace() for ch in clean):
+        raise ValueError("a worker-pool token needs a name without spaces, e.g. gpu-a")
+    if days < 1:
+        raise ValueError("a worker-pool token lives at least one day")
+    return create_access_token({"sub": f"{_WORKER_POOL_SUB_PREFIX}{clean}", "scope": WORKER_POOL_SCOPE},
+                               expires_delta=timedelta(days=days))
+
+
+def _worker_pool_route_allowed(method: str, path: str) -> bool:
+    return any(method == m and p.match(path) for m, p in _WORKER_POOL_ROUTES)
+
+
 def _run_scoped_route_allowed(run_id: str, method: str, path: str) -> bool:
     """Whether a token scoped to ``run_id`` may make this request (#120)."""
     if not run_id:
@@ -812,6 +853,11 @@ def install_auth(app: FastAPI) -> None:
                 return JSONResponse(
                     {"detail": "a per-run worker token may only report its own run "
                                "(events/ingest, control, its job's heartbeat)"},
+                    status_code=status.HTTP_403_FORBIDDEN,
+                )
+            if is_worker_pool_token(claims) and not _worker_pool_route_allowed(request.method, path):
+                return JSONResponse(
+                    {"detail": "a worker-pool token may only claim and heartbeat pull-lane jobs"},
                     status_code=status.HTTP_403_FORBIDDEN,
                 )
             # #205 — hand the workspace middleware the credential checked here,
