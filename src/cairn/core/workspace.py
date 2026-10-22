@@ -99,6 +99,9 @@ def workspace_collection(name: str, workspace_id: Optional[str] = None) -> str:
     an already-namespaced name is a no-op, so a collection resolved once and
     passed downstream (indexer → ``ingest_document``) is never double-prefixed.
 
+    In the default workspace a name starting with ``ws_`` (the prefix of every
+    other workspace's collections) raises ``ValueError``.
+
     **Unambiguous:** two workspaces never share a prefix. A slug id (what
     ``POST /workspaces`` makes from an ASCII name: ``[a-z0-9]`` runs joined by
     single dashes, at most :data:`MAX_WORKSPACE_ID_LEN` long) keeps the readable
@@ -115,6 +118,10 @@ def workspace_collection(name: str, workspace_id: Optional[str] = None) -> str:
     """
     ws = (workspace_id or current_workspace()).strip() or DEFAULT_WORKSPACE
     if ws == DEFAULT_WORKSPACE:
+        # the default workspace's names are bare, so a bare name never carries
+        # another workspace's prefix
+        if name.startswith("ws_"):
+            raise ValueError(f"collection name {name!r} is reserved for workspace-scoped collections")
         return name
     prefix = _collection_prefix(ws)
     return name if name.startswith(prefix) else f"{prefix}{name}"

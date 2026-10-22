@@ -143,6 +143,20 @@ def test_collection_key_is_unchanged_for_default_and_slug_workspace_ids():
     assert ws.workspace_collection("ws_acme__rag_x", "acme") == "ws_acme__rag_x"  # idempotent
 
 
+@pytest.mark.parametrize("raw", ["ws_team_b__rag_x__ab12", "ws__0123456789abcdef__rag_x", "ws_x"])
+def test_the_default_workspace_cannot_name_another_workspace_collection(raw):
+    with pytest.raises(ValueError, match="reserved"):
+        ws.workspace_collection(raw, "default")
+    tok = _in("default")
+    try:
+        with pytest.raises(ValueError, match="reserved"):
+            ws.workspace_collection(raw)
+    finally:
+        ws.reset_current_workspace(tok)
+    # inside a workspace a raw name is still its own (prefixed), as before
+    assert ws.workspace_collection(raw, A).startswith("ws_team_a__")
+
+
 @pytest.mark.parametrize(("other", "slug"), [
     ("acmeé", "acme"),             # a non-ASCII letter in a workspace name
     ("~no-workspace", "no-workspace"),
