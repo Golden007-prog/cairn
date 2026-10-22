@@ -68,6 +68,11 @@ SESSION_HOURS = 12
 #: rotation renews (a lost response, two tabs) instead of ending the sign-in.
 #: A constant by decision, not a setting.
 REUSE_GRACE_SECONDS = 10
+#: How far a rotation may appear to lie in the future (another replica's clock
+#: ahead of this one) and still count as "just now". Beyond that the elapsed time
+#: is not trusted and the replay is treated as outside the window: a replica
+#: lagging by minutes, or an NTP step, must not turn reuse into a renewal.
+_CLOCK_SKEW_SECONDS = 2
 
 
 def remember_days() -> int:
@@ -431,10 +436,12 @@ async def issue(sub: str, account_id: Optional[str], *, remember: bool,
 
 
 def _within_grace(row: RefreshToken, now: datetime) -> bool:
-    """Whether ``row`` was rotated less than :data:`REUSE_GRACE_SECONDS` ago."""
+    """Whether ``row`` was rotated less than :data:`REUSE_GRACE_SECONDS` ago. A
+    rotation more than :data:`_CLOCK_SKEW_SECONDS` in the future is not."""
     if row.used_at is None:
         return False
-    return (now - datetime.fromisoformat(row.used_at)).total_seconds() < REUSE_GRACE_SECONDS
+    elapsed = (now - datetime.fromisoformat(row.used_at)).total_seconds()
+    return -_CLOCK_SKEW_SECONDS <= elapsed < REUSE_GRACE_SECONDS
 
 
 async def validate(raw: str, *, store: Any = None) -> RefreshToken:

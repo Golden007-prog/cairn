@@ -50,5 +50,10 @@ before. Both name only the user (`sub`) and the first 8 characters of the family
   stays undetected rather than ending the family. Outside the window detection is as before.
 - The two-tab case is better but not perfect: whichever response the browser stores last wins
   the shared cookie, and if that is the revoked sibling the next refresh fails.
+- The window is measured between clocks: `used_at` is written by whichever replica rotated the
+  token and compared on whichever replica receives the replay. The replicas are assumed to keep
+  time with NTP. A rotation that appears up to 2 s in the future (a replica slightly ahead)
+  still counts as just now; one more than 2 s in the future (a lagging replica, an NTP step) is
+  not trusted, and the replay is treated as outside the window, so reuse rules apply.
 - Store gains two conditional updates on every backend (`revoke_unused`, `set_replaced_by`); no
   schema change.

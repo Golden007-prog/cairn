@@ -566,6 +566,25 @@ def test_a_replay_after_the_window_revokes_the_family(store, monkeypatch):
     asyncio.run(go())
 
 
+@pytest.mark.parametrize("skew,renews", [(-1, True), (-(RT._CLOCK_SKEW_SECONDS + 1), False)])
+def test_a_rotation_from_the_future_is_not_trusted_beyond_the_skew(store, monkeypatch, skew, renews):
+    """The rotation was stamped by a replica whose clock is ahead (or this one
+    stepped back): a second of lag still renews; more than the allowed skew is
+    treated as outside the window, so the replay is reuse (ADR-0144)."""
+    async def go():
+        raw, row = await RT.issue(f"user-{uuid.uuid4().hex}", "acme", remember=True, store=store)
+        _, c1 = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        _advance(monkeypatch, skew)
+        if renews:
+            _, c2 = await RT.rotate(await RT.validate(raw, store=store), store=store)
+            assert await _live(store, c1, c2) == [c2]
+        else:
+            with pytest.raises(RT.RefreshError, match="reused"):
+                await RT.validate(raw, store=store)
+            assert (await store.get(c1.token_hash)).revoked_at, "the family is revoked"
+    asyncio.run(go())
+
+
 def test_a_replay_of_a_parent_whose_child_was_already_rotated_revokes_the_family(store):
     """Renewing beside a child that already has a successor would leave two live
     chains, so that replay is reuse, window or not."""
