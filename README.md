@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="./assets/logo.svg" alt="cairn" width="88">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/logo-dark.svg">
+    <img src="./assets/logo.svg" alt="cairn" width="72">
+  </picture>
 </p>
 
 <h1 align="center">cairn</h1>
