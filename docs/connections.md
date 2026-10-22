@@ -50,7 +50,30 @@ closed: a `stdio` server (a command run on the cairn server) is built only when
 the caller passes `allow_stdio=True`, and an http/sse `url` must pass the probe's
 address guard (no loopback, link-local, cloud metadata or private address) unless
 the caller passes `allow_private_network=True`. Only the deployment's own callers
-pass either.
+pass either. Without `allow_private_network` the spec also carries an
+`httpx_client_factory` whose client does not follow redirects, so the checked
+address is the only one the client connects to; with it the spec keeps the MCP
+SDK's default client.
+
+A knowledge corpus source (`resolve_corpus_source`, `index_workspace_corpus`) is
+cloned only from a public `https://` git URL unless the caller passes
+`allow_local=True`. The clone is limited to https, does not follow redirects, and
+runs without the server's system or global git config (credential helpers, extra
+headers, URL rewrites) or a terminal prompt.
+
+Known limits of the address guard, shared by the probe, MCP specs and corpus
+clones: it resolves the host once, before connecting, so it does not defend
+against a DNS answer that changes between the check and the connection (DNS
+rebinding); and a host that does not resolve at check time passes it. Setting
+`CAIRN_PROBE_ALLOW_PRIVATE` lifts the private-address rule for all three, so on a
+multi-tenant deployment it also lets tenant MCP URLs and corpus clones reach
+private addresses (loopback, link-local and cloud metadata stay refused).
+
+Library callers: `mcp_server_spec`, `resolve_corpus_source` and
+`index_workspace_corpus` now default to the tenant-safe behaviour. Code that
+calls them for the deployment itself and relied on stdio servers, internal MCP
+URLs or local / ssh corpus sources must pass `allow_stdio=True`,
+`allow_private_network=True` or `allow_local=True`.
 
 ## OAuth connections (ADR-0037)
 
