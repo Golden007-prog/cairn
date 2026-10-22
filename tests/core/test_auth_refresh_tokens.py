@@ -246,6 +246,28 @@ def test_a_replay_within_the_grace_window_renews(client, caplog):
         assert secret not in msg
 
 
+def test_a_superseded_cookie_presented_after_the_window_ends_the_sign_in(client, caplog, monkeypatch):
+    """ADR-0145: a copy of the cookie was replayed within the window and took the
+    sign-in over (sibling ``c``). When the displaced client next presents its
+    own token ``b``, ten seconds or more after it was superseded, the family
+    ends: both are refused, and one WARNING names the user and family prefix."""
+    a = _cookie(_login(client))["value"]
+    b = _cookie(_refresh(client, a))["value"]          # the legitimate client
+    c = _cookie(_refresh(client, a))["value"]          # a copy of a, within the window
+    _advance(monkeypatch, RT.REUSE_GRACE_SECONDS + 1)
+    with caplog.at_level(logging.WARNING, logger="cairn.core.refresh_tokens"):
+        r = _refresh(client, b)
+    assert r.status_code == 401 and _cleared(r)
+    assert _row(c).revoked_at, "the sibling the copy got is revoked"
+    assert _refresh(client, c).status_code == 401
+    warned = [x.getMessage() for x in caplog.records if x.levelno == logging.WARNING]
+    family = _row(a).family_id
+    assert len(warned) == 1 and "superseded" in warned[0]
+    assert "sub=admin" in warned[0] and f"family={family[:8]}" in warned[0]
+    for secret in (a, b, c, RT.hash_token(b), family):
+        assert secret not in warned[0]
+
+
 def test_a_replay_after_logout_is_refused_even_within_the_window(client):
     a = _cookie(_login(client))["value"]
     b = _cookie(_refresh(client, a))["value"]
@@ -672,6 +694,105 @@ def test_a_replay_that_keeps_losing_the_race_gives_up_and_revokes_the_family(cap
         assert store.calls == RT._REPLAY_ATTEMPTS
         assert all(t.revoked_at for t in store._rows.values()), "the family is revoked"
         assert any("kept racing" in r.getMessage() for r in caplog.records)
+    asyncio.run(go())
+
+
+def _warnings(caplog) -> list[str]:
+    return [r.getMessage() for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == "cairn.core.refresh_tokens"]
+
+
+def test_a_superseded_token_after_the_window_revokes_the_family_once(store, monkeypatch, caplog):
+    """ADR-0145: B was superseded by a replay's sibling C. B presented ten seconds
+    or more later ends the family (C dies), with one WARNING; presenting B again
+    changes nothing and logs nothing."""
+    async def go():
+        raw, row = await RT.issue(f"user-{uuid.uuid4().hex}", "acme", remember=True, store=store)
+        raw_b, b = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        raw_c, c = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        assert await _live(store, b, c) == [c]
+        _advance(monkeypatch, RT.REUSE_GRACE_SECONDS)
+        with caplog.at_level(logging.WARNING, logger="cairn.core.refresh_tokens"):
+            with pytest.raises(RT.RefreshError, match="revoked"):
+                await RT.validate(raw_b, store=store)
+            assert (await store.get(c.token_hash)).revoked_at, "the sibling is revoked"
+            assert (await store.get(row.token_hash)).revoked_at
+            with pytest.raises(RT.RefreshError, match="revoked"):
+                await RT.validate(raw_b, store=store)
+            with pytest.raises(RT.RefreshError, match="revoked"):
+                await RT.validate(raw_c, store=store)
+        warned = _warnings(caplog)
+        assert len(warned) == 1 and "superseded" in warned[0] and f"family={row.family_id[:8]}" in warned[0]
+    asyncio.run(go())
+
+
+def test_a_superseded_token_within_the_window_is_refused_without_ending_the_sign_in(
+        store, monkeypatch, caplog):
+    """A request already in flight with the just-superseded child (a reload that
+    raced the replay) is refused, and the sibling that replaced it lives on."""
+    async def go():
+        raw, row = await RT.issue(f"user-{uuid.uuid4().hex}", "acme", remember=True, store=store)
+        raw_b, b = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        raw_c, c = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        _advance(monkeypatch, RT.REUSE_GRACE_SECONDS - 1)
+        with caplog.at_level(logging.WARNING, logger="cairn.core.refresh_tokens"):
+            with pytest.raises(RT.RefreshError, match="revoked"):
+                await RT.validate(raw_b, store=store)
+        assert (await store.get(c.token_hash)).revoked_at is None, "the sibling is alive"
+        assert await RT.validate(raw_c, store=store) == c
+        assert _warnings(caplog) == []
+    asyncio.run(go())
+
+
+def test_tokens_revoked_by_sign_out_or_a_password_change_end_nothing_more(store, monkeypatch, caplog):
+    """A token revoked with its whole family (sign-out, password change, disabling,
+    earlier reuse) presented later is refused: nothing more is revoked and
+    nothing is logged, because the family has nothing live left to end."""
+    async def go():
+        sub = f"user-{uuid.uuid4().hex}"
+        raw, row = await RT.issue(sub, "acme", remember=True, store=store)
+        raw_b, b = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        assert await RT.revoke_family_of(raw_b, store=store) is True          # sign-out
+        raw2, row2 = await RT.issue(sub, "acme", remember=False, store=store)
+        assert await RT.revoke_user(sub, store=store) == 1                     # password change
+        _, other = await RT.issue(sub, "acme", remember=True, store=store)    # signed in again since
+        _advance(monkeypatch, RT.REUSE_GRACE_SECONDS + 60)
+        with caplog.at_level(logging.WARNING, logger="cairn.core.refresh_tokens"):
+            for presented in (raw_b, raw2):
+                with pytest.raises(RT.RefreshError, match="revoked"):
+                    await RT.validate(presented, store=store)
+        assert _warnings(caplog) == []
+        assert (await store.get(other.token_hash)).revoked_at is None, "a later sign-in is untouched"
+    asyncio.run(go())
+
+
+def test_two_tabs_outcome_is_unchanged(store, monkeypatch, caplog):
+    """Two tabs refreshed at once: one child was superseded by the other's sibling.
+    If the browser kept the live sibling, the next refresh renews as before. If it
+    kept the superseded one, the next refresh is refused as before; the family,
+    which nobody holds a live token for any more, ends with a WARNING."""
+    async def go():
+        for kept_live in (True, False):
+            raw, row = await RT.issue(f"user-{uuid.uuid4().hex}", "acme", remember=True, store=store)
+            live = await RT.validate(raw, store=store)
+            results = await asyncio.gather(RT.rotate(live, store=store), RT.rotate(live, store=store))
+            alive = await _live(store, *(r[1] for r in results))
+            assert len(alive) == 1
+            raw_alive = next(r[0] for r in results if r[1] == alive[0])
+            raw_dead = next(r[0] for r in results if r[1] != alive[0])
+            monkeypatch.undo()
+            _advance(monkeypatch, RT.REUSE_GRACE_SECONDS + 1800)   # the next refresh, half an hour on
+            caplog.clear()
+            with caplog.at_level(logging.WARNING, logger="cairn.core.refresh_tokens"):
+                if kept_live:
+                    assert await RT.validate(raw_alive, store=store) == alive[0]
+                    await RT.rotate(alive[0], store=store)
+                    assert _warnings(caplog) == []
+                else:
+                    with pytest.raises(RT.RefreshError, match="revoked"):
+                        await RT.validate(raw_dead, store=store)
+                    assert len(_warnings(caplog)) == 1
+            monkeypatch.undo()
     asyncio.run(go())
 
 

@@ -19,7 +19,8 @@ SHA-256 (`src/cairn/core/refresh_tokens.py`). `POST /auth/refresh` needs `X-Cair
 and a same-origin `Origin`/`Referer`, rotates the token, and revokes the whole family when a
 rotated token comes back ten seconds or more after its rotation; within ten seconds it renews
 instead, revoking the child that rotation issued, so a replay inside that window is not
-detected as theft (ADR-0144); `POST /auth/logout` (same header and origin check), a password
+detected as theft at first (ADR-0144); the displaced child presented ten seconds or more later
+revokes the family and logs a WARNING (ADR-0145); `POST /auth/logout` (same header and origin check), a password
 change and disabling a user revoke the user's families
 (`triggers/auth.py`, `account.py`). An issued access token stays valid until it expires, and
 rotating `CAIRN_JWT_SECRET` does not end refresh families.
