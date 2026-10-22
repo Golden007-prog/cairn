@@ -82,6 +82,26 @@ def test_tenant_prefix_of_another_account_does_not_match():
     assert resolve_secret(ref, account_id="acct-a") is None
 
 
+@pytest.mark.parametrize("ref", [
+    "cairn://secrets#acct-b",            # the account name alone, no "/<conn>-<KEY>"
+    "cairn://secrets#acct-b/",           # an empty key after the account
+    "cairn://other#acct-b/c-K",          # a different locator
+    "cairn://#acct-b/c-K",               # no locator
+    "CAIRN://secrets#acct-b/c-K",        # upper-case scheme is not the cairn scheme
+    "Cairn://secrets#acct-b/c-K",
+])
+def test_tenant_malformed_cairn_refs_are_refused(ref):
+    # the deployment holds a value under every key these could be read as
+    put_secret("cairn://secrets#acct-b", "deployment-acct-b")
+    put_secret("cairn://secrets#acct-b/c-K", "tenant-value", account_id="acct-b")
+    assert resolve_secret(ref, account_id="acct-b") is None
+    assert secrets_store.ref_in_account(ref, "acct-b") is False
+    with pytest.raises(ValueError):
+        put_secret(ref, "x", account_id="acct-b")
+    # the well-formed ref still resolves for its own account
+    assert resolve_secret("cairn://secrets#acct-b/c-K", account_id="acct-b") == "tenant-value"
+
+
 def test_tenant_infisical_ref_outside_its_namespace_never_reaches_the_backend(monkeypatch):
     monkeypatch.setenv("INFISICAL_PROJECT_ID", "proj")
 
