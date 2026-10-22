@@ -179,7 +179,10 @@ def test_a_tenant_clone_env_is_an_allowlist(git_stub, tmp_path, monkeypatch):
             "SSL_CERT_FILE": "/etc/ssl/ca.pem", "LC_ALL": "C.UTF-8"}
     for k, v in {**injected, **kept}.items():
         monkeypatch.setenv(k, v)
-    monkeypatch.setenv("HOME", str(tmp_path / "server-home"))
+    server_home = tmp_path / "server-home"
+    server_home.mkdir()
+    (server_home / ".gitconfig").write_text("[http]\n\textraHeader = X: y\n")
+    monkeypatch.setenv("HOME", str(server_home))
 
     seen: dict = {}
 
