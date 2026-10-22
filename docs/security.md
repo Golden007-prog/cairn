@@ -13,6 +13,14 @@ live in `deploy/light/README.md`; connections in `docs/connections.md`.
 | Webhook senders | a valid signature over the body, keyed with a non-empty secret, on the receiver's own method + path under `/triggers/` | an empty secret (refused, never public); any other method or route at that path; the `X-Cairn-Workspace` header (the run lands in the workspace that declared the receiver, queued or inline); a webhook path, trigger id or name another workspace already holds (not armed; a path that still reaches the router from two workspaces mounts no receiver). Exception: a workspace's webhook still replaces a pack/overlay receiver at the same path | `_mount_trigger_routes` (`triggers/server.py`); `verify_signature` and `TriggerRouter.from_installed` (`triggers/router.py`); `_converge` (`engine/triggers_grammar.py`) and the trigger store's `create` (`storage/trigger_store.py`); `ingress_path_problem` (`engine/triggers_spec.py`) |
 | Human approvers | the identity recorded on the gate (`StepState.approver`); the gate's `approvers:` (a username or a role; owner/admin always; an unknown name → owner/admin only, #2393) | a body `approver` field (#2310); a name the gate does not list (403, audited `operation.approval` `deny`); `/advance` on a gate (409, #2388) | `POST /pipelines/{id}/steps/{step}/approve` (auth-required, `_assert_may_decide`; declared gate steps only) |
 
+**Console sign-ins (ADR-0142).** A console sign-in is a short access token plus an httpOnly,
+`SameSite=Strict` refresh cookie (`Path=/auth`); the server stores only the cookie token's
+SHA-256 (`src/cairn/core/refresh_tokens.py`). `POST /auth/refresh` needs `X-Cairn-Refresh: 1`
+and a same-origin `Origin`/`Referer`, rotates the token, and revokes the whole family when a
+rotated token comes back; `POST /auth/logout`, a password change and disabling a user revoke
+(`triggers/auth.py`, `account.py`). An issued access token stays valid until it expires, and
+rotating `CAIRN_JWT_SECRET` does not end refresh families.
+
 **Known gap:** with `CAIRN_JWT_SECRET` unset the control plane starts OPEN and says so at
 startup (`AUTH DISABLED …`, `src/cairn/core/triggers/server.py`); any authenticated user can
 approve any gate (`15-architecture-risks.md` C2, #1486). Never expose an unset-secret

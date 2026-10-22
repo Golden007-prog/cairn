@@ -16,7 +16,7 @@ platform's ``admin`` router provider. A user record NEVER exposes its password h
 from typing import Annotated, Any, Optional
 from urllib.parse import quote, urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 
 from cairn.core._time import utc_now_iso
@@ -24,7 +24,9 @@ from cairn.core.triggers import console_support as support
 from cairn.core.triggers.auth import (
     _oauth2_scheme,
     caller_identity,
+    identity_claims,
     is_env_admin,
+    issue_refresh_cookie,
     require_admin,
     require_auth,
 )
@@ -374,7 +376,7 @@ def build_accounts_router() -> APIRouter:
                 "providers": configured_providers() if auth_enabled() else []}
 
     @r.post("/auth/signup")
-    async def signup_ep(body: dict) -> dict[str, Any]:
+    async def signup_ep(body: dict, request: Request, response: Response) -> dict[str, Any]:
         """Create an account + its first user (or join by domain).
 
         Also creates the account's first WORKSPACE, so a new company lands
@@ -403,10 +405,12 @@ def build_accounts_router() -> APIRouter:
         # token is the one `POST /token` would issue for these credentials (same
         # claims) and the console lands in setup instead of on /login. Issued on
         # the join-by-domain path too, where `/token` would equally succeed.
-        # `None` when auth is off (keyless dev needs no token).
+        # `None` when auth is off (keyless dev needs no token). ADR-0142: a
+        # remembered sign-in, so the refresh cookie is set too (none with auth off).
         from cairn.core.triggers.auth import auth_enabled, create_access_token
-        token = (create_access_token({"sub": user.id, "account_id": acct.id})
+        token = (create_access_token(identity_claims(user.id, acct.id))
                  if auth_enabled() else None)
+        await issue_refresh_cookie(response, request, user.id, acct.id, remember=True)
         return {"account_id": acct.id, "account_name": acct.name,
                 "username": user.username, "created_account": created,
                 "workspace_id": ws_id, "access_token": token, "token_type": "bearer",
@@ -464,12 +468,12 @@ def build_accounts_router() -> APIRouter:
                 ws_id = await _provision_first_workspace(acct, "", actor=out.user.id, source="oauth")
             else:
                 ws_id = await support.home_workspace(out.account_id)
-            claims: dict[str, Any] = {"sub": out.user.id}
-            if out.account_id:
-                claims["account_id"] = out.account_id
+            claims = identity_claims(out.user.id, out.account_id)
             frag = urlencode({"access_token": create_access_token(claims), "token_type": "bearer",
                               "workspace": ws_id, "new_account": "1" if out.created_account else "0"})
             resp = RedirectResponse(f"/console/oauth/callback#{frag}", status_code=302)
+            # ADR-0142 — a remembered sign-in: the refresh cookie rides the redirect.
+            await issue_refresh_cookie(resp, request, out.user.id, out.account_id, remember=True)
         resp.delete_cookie(ol.COOKIE_NAME, path=ol.COOKIE_PATH)
         resp.headers["Cache-Control"] = "no-store"
         resp.headers["Referrer-Policy"] = "no-referrer"

@@ -1,0 +1,442 @@
+"""Renewable console sign-ins: the refresh cookie, rotation, server-side sign-out (ADR-0142).
+
+A real app with auth ON and the account, workspace and refresh-token stores in a
+temporary directory. Every sign-in door (``POST /token``, sign-up, the Google
+landing) sets the cookie; ``POST /auth/refresh`` rotates it and refuses reuse,
+expiry, revocation, a cross-origin caller and a missing header; ``POST
+/auth/logout``, a password change and disabling a user revoke it. The store tests
+run against the in-memory and SQLite stores, and against Postgres when
+``PGSTORE_DSN`` is set.
+"""
+from __future__ import annotations
+
+import asyncio
+import importlib.util
+import os
+import types
+import uuid
+from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, urlparse
+
+os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy")
+
+import pytest
+
+from cairn.core import account as A
+from cairn.core import refresh_tokens as RT
+from cairn.core.auth_tokens import decode_claims
+from cairn.core.triggers import auth
+
+SECRET = "test-secret-long-enough-for-hs256-abc"
+ORIGIN = "http://testserver"
+REFRESH_HEADERS = {"X-Cairn-Refresh": "1", "Origin": ORIGIN}
+
+
+def _clean_env(monkeypatch) -> None:
+    for name in ("JWT_SECRET", "JWT_ALGORITHM", "ACCESS_TOKEN_EXPIRE_MINUTES", "API_USER",
+                 "API_PASSWORD", "API_PASSWORD_HASH", "REQUIRE_AUTH", "PUBLIC_URL",
+                 "REFRESH_TOKEN_DAYS", "SIGNUP"):
+        monkeypatch.delenv(f"CAIRN_{name}", raising=False)
+        monkeypatch.delenv(f"OBS_{name}", raising=False)
+
+
+def _app(tmp_path, monkeypatch):
+    from cairn.core import workspace as _ws
+
+    monkeypatch.setenv("CAIRN_RUN_DB", str(tmp_path / "r.db"))
+    monkeypatch.setattr(A, "_store", A.SqliteAccountStore(path=str(tmp_path / "a.db")))
+    monkeypatch.setattr(_ws, "_store", _ws.SqliteWorkspaceStore(path=str(tmp_path / "w.db")))
+    monkeypatch.setattr(RT, "_default_store", RT.SqliteRefreshTokenStore(path=str(tmp_path / "rt.db")))
+    monkeypatch.setattr(auth, "_login_failures", {})
+
+    from fastapi.testclient import TestClient
+
+    from cairn.core.triggers.server import build_app
+
+    class FakeRunner:
+        default_environment = "production"
+        skill_engine = types.SimpleNamespace(list_skills=lambda: [])
+
+        async def run(self, *a, **k):
+            return {}
+
+    return TestClient(build_app(FakeRunner(), enable_scheduler=False))
+
+
+@pytest.fixture()
+def client(tmp_path, monkeypatch):
+    """Auth on, with the env admin ``admin`` / ``pw``."""
+    _clean_env(monkeypatch)
+    monkeypatch.setenv("CAIRN_JWT_SECRET", SECRET)
+    monkeypatch.setenv("CAIRN_API_USER", "admin")
+    monkeypatch.setenv("CAIRN_API_PASSWORD", "pw")
+    return _app(tmp_path, monkeypatch)
+
+
+# ─── helpers ───────────────────────────────────────────────────────
+
+
+def _cookie(resp) -> dict[str, str]:
+    """The ``cairn_refresh`` Set-Cookie as ``{"value": …, <attr lower>: …}``."""
+    for header in resp.headers.get_list("set-cookie"):
+        if header.startswith(f"{auth.REFRESH_COOKIE}="):
+            parts = [p.strip() for p in header.split(";")]
+            out = {"value": parts[0].split("=", 1)[1]}
+            for p in parts[1:]:
+                k, _, v = p.partition("=")
+                out[k.lower()] = v
+            return out
+    raise AssertionError(f"no {auth.REFRESH_COOKIE} cookie in {resp.headers.get_list('set-cookie')}")
+
+
+def _no_cookie(resp) -> bool:
+    return not any(h.startswith(f"{auth.REFRESH_COOKIE}=") for h in resp.headers.get_list("set-cookie"))
+
+
+def _cleared(resp) -> bool:
+    c = _cookie(resp)
+    return c["value"] in ("", '""') and (c.get("max-age") == "0" or "expires" in c)
+
+
+def _login(c, username="admin", password="pw", **extra):
+    c.cookies.clear()
+    r = c.post("/token", data={"username": username, "password": password, **extra})
+    assert r.status_code == 200, r.text
+    return r
+
+
+def _refresh(c, raw, headers=REFRESH_HEADERS):
+    c.cookies.clear()
+    return c.post("/auth/refresh", headers={**headers, "Cookie": f"{auth.REFRESH_COOKIE}={raw}"})
+
+
+def _row(raw):
+    return asyncio.run(RT.default_refresh_token_store().get(RT.hash_token(raw)))
+
+
+def _store_user(username="ada@acme.com", password="pw12345"):
+    async def go():
+        acct = await A.create_account("Acme", account_id="acme")
+        u = await A.create_user(username, password)
+        await A.add_member(acct.id, u.id, "member")
+        return u
+    return asyncio.run(go())
+
+
+# ─── minting on POST /token ────────────────────────────────────────
+
+
+def test_token_sets_a_remembered_refresh_cookie(client):
+    r = _login(client)
+    body = r.json()
+    assert set(body) == {"access_token", "token_type"} and body["token_type"] == "bearer"
+    c = _cookie(r)
+    assert "httponly" in c and c["samesite"].lower() == "strict" and c["path"] == "/auth"
+    assert "secure" not in c, "plain http on the test server: not Secure"
+    assert abs(int(c["max-age"]) - 30 * 86400) <= 5
+    row = _row(c["value"])
+    assert row is not None and row.remember and row.sub == "admin" and row.account_id == "default"
+    assert row.token_hash == RT.hash_token(c["value"]) and row.token_hash != c["value"]
+    assert abs(row.seconds_left() - 30 * 86400) <= 5
+
+
+def test_token_remember_false_is_a_session_cookie_with_a_12_hour_server_expiry(client):
+    c = _cookie(_login(client, remember="false"))
+    assert "max-age" not in c and "expires" not in c
+    assert "httponly" in c and c["samesite"].lower() == "strict" and c["path"] == "/auth"
+    row = _row(c["value"])
+    assert row.remember is False and abs(row.seconds_left() - 12 * 3600) <= 5
+
+
+def test_refresh_token_days_sets_the_remembered_lifetime(client, monkeypatch):
+    monkeypatch.setenv("CAIRN_REFRESH_TOKEN_DAYS", "7")
+    c = _cookie(_login(client))
+    assert abs(int(c["max-age"]) - 7 * 86400) <= 5
+    assert abs(_row(c["value"]).seconds_left() - 7 * 86400) <= 5
+
+
+def test_the_cookie_is_secure_when_the_public_url_is_https(client, monkeypatch):
+    monkeypatch.setenv("CAIRN_PUBLIC_URL", "https://cairn.example.com")
+    assert "secure" in _cookie(_login(client))
+
+
+def test_a_failed_login_sets_no_cookie(client):
+    client.cookies.clear()
+    r = client.post("/token", data={"username": "admin", "password": "wrong"})
+    assert r.status_code == 401 and _no_cookie(r)
+
+
+# ─── POST /auth/refresh ────────────────────────────────────────────
+
+
+def test_refresh_rotates_and_re_mints_the_same_claims(client):
+    first = _login(client)
+    old = _cookie(first)["value"]
+    r = _refresh(client, old)
+    assert r.status_code == 200, r.text
+    assert set(r.json()) == {"access_token", "token_type"}
+    claims = decode_claims(r.json()["access_token"])
+    assert (claims["sub"], claims["account_id"]) == ("admin", "default")
+    new = _cookie(r)
+    assert new["value"] != old and new["path"] == "/auth" and "httponly" in new
+    before, after = _row(old), _row(new["value"])
+    assert before.used_at and before.replaced_by == after.token_hash
+    assert after.family_id == before.family_id and after.expires_at == before.expires_at
+    assert int(new["max-age"]) <= int(_cookie(first)["max-age"])
+    me = client.get("/auth/me", headers={"Authorization": f"Bearer {r.json()['access_token']}"})
+    assert me.status_code == 200 and me.json()["username"] == "admin"
+    assert _refresh(client, new["value"]).status_code == 200, "the new token rotates in turn"
+
+
+def test_reusing_a_rotated_token_revokes_the_whole_family(client):
+    a = _cookie(_login(client))["value"]
+    b = _cookie(_refresh(client, a))["value"]
+    reuse = _refresh(client, a)
+    assert reuse.status_code == 401 and "reused" in reuse.json()["detail"]
+    assert _cleared(reuse)
+    assert _row(b).revoked_at, "the live token of the family is revoked too"
+    assert _refresh(client, b).status_code == 401
+
+
+def test_an_expired_token_is_refused(client):
+    raw = _cookie(_login(client))["value"]
+    store = RT.default_refresh_token_store()
+    past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    store._conn.execute("UPDATE refresh_tokens SET expires_at=? WHERE token_hash=?",
+                        (past, RT.hash_token(raw)))
+    store._conn.commit()
+    r = _refresh(client, raw)
+    assert r.status_code == 401 and "expired" in r.json()["detail"] and _cleared(r)
+
+
+def test_an_unknown_token_and_no_cookie_are_refused(client):
+    r = _refresh(client, "not-a-token")
+    assert r.status_code == 401 and "unknown" in r.json()["detail"]
+    client.cookies.clear()
+    r = client.post("/auth/refresh", headers=REFRESH_HEADERS)
+    assert r.status_code == 401
+
+
+def test_a_store_user_refreshes_into_their_account(client):
+    _store_user()
+    raw = _cookie(_login(client, "ada@acme.com", "pw12345"))["value"]
+    r = _refresh(client, raw)
+    assert r.status_code == 200, r.text
+    assert decode_claims(r.json()["access_token"])["account_id"] == "acme"
+
+
+def test_a_disabled_user_cannot_refresh(client):
+    u = _store_user()
+    raw = _cookie(_login(client, "ada@acme.com", "pw12345"))["value"]
+    asyncio.run(A.set_disabled(u.id, True))
+    assert _row(raw).revoked_at, "disabling revokes"
+    assert _refresh(client, raw).status_code == 401
+
+
+def test_a_user_disabled_behind_the_hook_is_still_refused_and_revoked(client):
+    """The refresh-time check holds even when the record was changed without
+    :func:`account.set_disabled` (a direct store write)."""
+    u = _store_user()
+    raw = _cookie(_login(client, "ada@acme.com", "pw12345"))["value"]
+    u.disabled = True
+    asyncio.run(A.get_account_store().put_user(u))
+    r = _refresh(client, raw)
+    assert r.status_code == 401 and "inactive" in r.json()["detail"]
+    assert _row(raw).revoked_at
+
+
+def test_the_env_admin_cannot_refresh_once_it_is_no_longer_configured(client, monkeypatch):
+    raw = _cookie(_login(client))["value"]
+    monkeypatch.delenv("CAIRN_API_PASSWORD")
+    assert _refresh(client, raw).status_code == 401
+
+
+def test_a_password_change_revokes_every_sign_in(client):
+    u = _store_user()
+    one = _cookie(_login(client, "ada@acme.com", "pw12345"))["value"]
+    two = _cookie(_login(client, "ada@acme.com", "pw12345", remember="false"))["value"]
+    asyncio.run(A.set_password(u.id, "new-password"))
+    assert _row(one).revoked_at and _row(two).revoked_at
+    assert _refresh(client, one).status_code == 401
+    assert _refresh(client, two).status_code == 401
+
+
+def test_a_cross_origin_refresh_is_refused(client):
+    raw = _cookie(_login(client))["value"]
+    for headers in ({"X-Cairn-Refresh": "1", "Origin": "https://evil.example"},
+                    {"X-Cairn-Refresh": "1", "Referer": "https://evil.example/console"},
+                    {"X-Cairn-Refresh": "1", "Origin": "null"},
+                    {"X-Cairn-Refresh": "1"}):
+        r = _refresh(client, raw, headers)
+        assert r.status_code == 403, (headers, r.text)
+    assert _row(raw).used_at is None, "a refused request rotates nothing"
+    ok = _refresh(client, raw, {"X-Cairn-Refresh": "1", "Referer": f"{ORIGIN}/console/runs"})
+    assert ok.status_code == 200, "a same-origin Referer stands in for Origin"
+
+
+def test_the_public_url_host_is_same_origin(client, monkeypatch):
+    monkeypatch.setenv("CAIRN_PUBLIC_URL", "https://cairn.example.com")
+    raw = _cookie(_login(client))["value"]
+    r = _refresh(client, raw, {"X-Cairn-Refresh": "1", "Origin": "https://cairn.example.com"})
+    assert r.status_code == 200, r.text
+
+
+def test_a_refresh_without_the_header_is_refused(client):
+    raw = _cookie(_login(client))["value"]
+    for headers in ({"Origin": ORIGIN}, {"Origin": ORIGIN, "X-Cairn-Refresh": "0"}):
+        assert _refresh(client, raw, headers).status_code == 403
+    assert _row(raw).used_at is None
+
+
+def test_failed_refreshes_hit_the_login_throttle(client):
+    for _ in range(auth._LOGIN_MAX_FAILURES):
+        assert _refresh(client, "guess").status_code == 401
+    r = _refresh(client, "guess")
+    assert r.status_code == 429 and r.headers.get("retry-after")
+
+
+# ─── POST /auth/logout ─────────────────────────────────────────────
+
+
+def test_logout_revokes_the_family_and_clears_the_cookie(client):
+    a = _cookie(_login(client))["value"]
+    b = _cookie(_refresh(client, a))["value"]
+    client.cookies.clear()
+    r = client.post("/auth/logout", headers={"Cookie": f"{auth.REFRESH_COOKIE}={b}"})
+    assert r.status_code == 204 and _cleared(r)
+    assert _row(a).revoked_at and _row(b).revoked_at
+    assert _refresh(client, b).status_code == 401
+
+
+def test_logout_is_idempotent_and_needs_no_access_token(client):
+    raw = _cookie(_login(client))["value"]
+    for _ in range(2):
+        client.cookies.clear()
+        r = client.post("/auth/logout", headers={"Cookie": f"{auth.REFRESH_COOKIE}={raw}"})
+        assert r.status_code == 204
+    client.cookies.clear()
+    assert client.post("/auth/logout").status_code == 204
+    assert client.post("/auth/logout", headers={"Cookie": f"{auth.REFRESH_COOKIE}=unknown"}).status_code == 204
+
+
+# ─── auth off ──────────────────────────────────────────────────────
+
+
+def test_auth_off_sets_no_cookie_and_the_endpoints_answer_like_token(tmp_path, monkeypatch):
+    _clean_env(monkeypatch)
+    monkeypatch.setenv("CAIRN_SIGNUP", "open")
+    c = _app(tmp_path, monkeypatch)
+    token = c.post("/token", data={"username": "a", "password": "b"})
+    assert token.status_code == 400 and _no_cookie(token)
+    for path in ("/auth/refresh", "/auth/logout"):
+        r = c.post(path, headers={**REFRESH_HEADERS, "Cookie": f"{auth.REFRESH_COOKIE}=x"})
+        assert (r.status_code, r.json()["detail"]) == (400, token.json()["detail"]), path
+    s = c.post("/auth/signup", json={"company": "Acme", "email": "a@acme.com", "password": "pw12345"})
+    assert s.status_code == 200 and s.json()["access_token"] is None and _no_cookie(s)
+
+
+# ─── the other sign-in doors ───────────────────────────────────────
+
+
+def test_signup_sets_a_remembered_refresh_cookie(client):
+    client.cookies.clear()
+    r = client.post("/auth/signup", json={"company": "Acme", "email": "a@acme.com", "password": "pw12345"})
+    assert r.status_code == 200, r.text
+    assert r.json()["access_token"], "the body is unchanged: it still carries the token"
+    c = _cookie(r)
+    assert "httponly" in c and c["samesite"].lower() == "strict" and c["path"] == "/auth"
+    assert abs(int(c["max-age"]) - 30 * 86400) <= 5
+    row = _row(c["value"])
+    assert row.remember and row.sub == decode_claims(r.json()["access_token"])["sub"]
+    assert _refresh(client, c["value"]).status_code == 200
+
+
+@pytest.mark.skipif(importlib.util.find_spec("authlib") is None, reason="needs the [oauth] extra (authlib)")
+def test_the_google_landing_sets_a_remembered_refresh_cookie(client, monkeypatch):
+    import httpx
+
+    from cairn.core import oauth_login as OL
+    from tests.core.test_oauth_login import GOOGLE_ID, FakeProvider
+
+    monkeypatch.setenv("CAIRN_OAUTH_GOOGLE_CLIENT_ID", GOOGLE_ID)
+    monkeypatch.setenv("CAIRN_OAUTH_GOOGLE_CLIENT_SECRET", "g-secret")
+    monkeypatch.setattr(OL, "_transport", httpx.MockTransport(FakeProvider()))
+    client.cookies.clear()
+    start = client.get("/auth/oauth/google/start", follow_redirects=False)
+    state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
+    cb = client.get("/auth/oauth/google/callback", follow_redirects=False,
+                    params={"code": "the-code", "state": state})
+    assert cb.status_code == 302 and urlparse(cb.headers["location"]).path == "/console/oauth/callback"
+    c = _cookie(cb)
+    assert "httponly" in c and c["samesite"].lower() == "strict" and c["path"] == "/auth"
+    assert abs(int(c["max-age"]) - 30 * 86400) <= 5
+    frag = {k: v[0] for k, v in parse_qs(urlparse(cb.headers["location"]).fragment).items()}
+    assert _row(c["value"]).sub == decode_claims(frag["access_token"])["sub"]
+    assert _refresh(client, c["value"]).status_code == 200
+
+
+# ─── store parity ──────────────────────────────────────────────────
+
+
+def _pg_dsn():
+    dsn = os.environ.get("PGSTORE_DSN")
+    if not dsn:
+        pytest.skip("PGSTORE_DSN not set — skipping live Postgres integration")
+    try:
+        import asyncpg  # noqa: F401
+    except ImportError:
+        pytest.skip("storage-postgres optional dep group not installed")
+    return dsn
+
+
+@pytest.fixture(params=["memory", "sqlite", "postgres"])
+def store(request, tmp_path):
+    if request.param == "memory":
+        yield RT.InMemoryRefreshTokenStore()
+    elif request.param == "sqlite":
+        s = RT.SqliteRefreshTokenStore(path=str(tmp_path / "rt.db"))
+        yield s
+        s.close()
+    else:
+        yield RT.PostgresRefreshTokenStore(dsn=_pg_dsn())
+
+
+def test_store_parity(store):
+    async def go():
+        sub = f"user-{uuid.uuid4().hex}"
+        raw, row = await RT.issue(sub, None, remember=False, store=store)
+        got = await store.get(RT.hash_token(raw))
+        assert got == row and got.remember is False and got.account_id is None
+        assert await RT.validate(raw, store=store) == row
+        raw2, row2 = await RT.rotate(row, store=store)
+        assert (row2.family_id, row2.expires_at, row2.remember) == (row.family_id, row.expires_at, False)
+        used = await store.get(row.token_hash)
+        assert used.used_at and used.replaced_by == row2.token_hash
+        assert await store.mark_used(row.token_hash, at="x", replaced_by="y") is False, "compare-and-set"
+        with pytest.raises(RT.RefreshError, match="reused"):
+            await RT.validate(raw, store=store)
+        assert (await store.get(row2.token_hash)).revoked_at, "reuse revoked the family"
+        with pytest.raises(RT.RefreshError, match="revoked"):
+            await RT.validate(raw2, store=store)
+        # a second family for the same user, and one for someone else
+        raw3, row3 = await RT.issue(sub, "acme", remember=True, store=store)
+        _, other = await RT.issue(f"other-{uuid.uuid4().hex}", "acme", remember=True, store=store)
+        assert (await store.get(row3.token_hash)).remember is True
+        assert await RT.revoke_user(sub, store=store) == 1, "only the live family is revoked again"
+        assert (await store.get(other.token_hash)).revoked_at is None
+        assert await RT.revoke_family_of(raw3, store=store) is True
+        assert await RT.revoke_family_of("nope", store=store) is False
+        assert await store.get(RT.hash_token("nope")) is None
+    asyncio.run(go())
+
+
+def test_the_factory_follows_cairn_storage(monkeypatch, tmp_path):
+    monkeypatch.setattr(RT, "_default_store", None)
+    monkeypatch.setenv("CAIRN_STORAGE", "postgres://u:p@h/db")
+    assert isinstance(RT.default_refresh_token_store(), RT.PostgresRefreshTokenStore)
+    monkeypatch.setattr(RT, "_default_store", None)
+    monkeypatch.setenv("CAIRN_STORAGE", f"sqlite:///{tmp_path}/x.db")
+    s = RT.default_refresh_token_store()
+    assert isinstance(s, RT.SqliteRefreshTokenStore) and s.path == f"{tmp_path}/x.db"
+    s.close()
+    monkeypatch.setattr(RT, "_default_store", None)

@@ -719,6 +719,12 @@ INVENTORY: list[SettingSpec] = [
         "Lifetime of an issued access token, in minutes (core.auth_tokens).",
     ),
     SettingSpec(
+        "refresh_token_days", "CAIRN_REFRESH_TOKEN_DAYS", "30", "auth",
+        "Lifetime of a remembered console sign-in (the refresh cookie and its server "
+        "row), in days; a sign-in that is not remembered lasts 12 hours "
+        "(core.refresh_tokens, ADR-0142).",
+    ),
+    SettingSpec(
         "api_user", "CAIRN_API_USER", "admin", "auth",
         "Username of the env-configured API user (core.triggers.auth).",
     ),
