@@ -101,8 +101,9 @@ def workspace_collection(name: str, workspace_id: Optional[str] = None) -> str:
 
     **Unambiguous:** two workspaces never share a prefix. A slug id (what
     ``POST /workspaces`` makes from an ASCII name: ``[a-z0-9]`` runs joined by
-    single dashes) keeps the readable ``ws_<id with - as _>__`` it always had; any
-    other id (non-ASCII, uppercase, underscores, leading/trailing dashes) maps to
+    single dashes, at most :data:`MAX_WORKSPACE_ID_LEN` long) keeps the readable
+    ``ws_<id with - as _>__`` it always had; any other id (non-ASCII, uppercase,
+    underscores, leading/trailing dashes, longer slugs) maps to
     ``ws__<sha256 prefix>__``, which no slug id can produce, so sanitizing can
     never fold one workspace onto another (SQLite and Postgres table names are
     also case-insensitive, hence the lowercase-only slug rule).
@@ -122,10 +123,24 @@ def workspace_collection(name: str, workspace_id: Optional[str] = None) -> str:
 #: A workspace id in the slug form ``_slug_workspace_id`` produces from an ASCII name.
 _SLUG_WORKSPACE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
+#: Longest workspace id a create assigns (``POST /workspaces``, an account's first
+#: workspace). Collection names start with the workspace prefix, and Postgres keeps
+#: only the first 63 bytes of an identifier: with ids this short, the whole prefix
+#: always falls inside those bytes, so two workspaces' tables stay distinct.
+MAX_WORKSPACE_ID_LEN = 40
+
+
+def cap_workspace_id(slug: str, suffix: str = "") -> str:
+    """``slug`` followed by ``suffix`` (a ``-2`` dedupe), cut so the result is at
+    most :data:`MAX_WORKSPACE_ID_LEN` characters (a dash left at the cut is dropped)."""
+    return slug[: MAX_WORKSPACE_ID_LEN - len(suffix)].rstrip("-") + suffix
+
 
 def _collection_prefix(workspace_id: str) -> str:
-    """The collection prefix of a non-default workspace (see :func:`workspace_collection`)."""
-    if _SLUG_WORKSPACE_ID.fullmatch(workspace_id):
+    """The collection prefix of a non-default workspace (see :func:`workspace_collection`).
+    A slug id longer than :data:`MAX_WORKSPACE_ID_LEN` (created before the cap)
+    takes the hashed form, so its prefix stays short too."""
+    if _SLUG_WORKSPACE_ID.fullmatch(workspace_id) and len(workspace_id) <= MAX_WORKSPACE_ID_LEN:
         return f"ws_{workspace_id.replace('-', '_')}__"
     digest = hashlib.sha256(workspace_id.encode("utf-8")).hexdigest()[:16]
     return f"ws__{digest}__"

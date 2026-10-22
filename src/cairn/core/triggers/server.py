@@ -321,7 +321,8 @@ class InstallRequest(BaseModel):
 
 class WorkspaceCreate(BaseModel):
     """Payload for POST /workspaces (#228). ``id`` is optional — derived as a
-    slug from ``name`` when omitted."""
+    slug from ``name`` when omitted. The id assigned is at most
+    ``MAX_WORKSPACE_ID_LEN`` (40) characters: a longer slug is cut."""
     name: str = Field(..., min_length=1)
     id: Optional[str] = None
 

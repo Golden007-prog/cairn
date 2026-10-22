@@ -75,14 +75,14 @@ async def _provision_first_workspace(acct: Any, company: str, *, actor: str, sou
     norm for Google/GitHub (#2336) — used to overwrite the first company's
     workspace and re-stamp it with the new account."""
     from cairn.core.triggers.server import _slug_workspace_id  # noqa: PLC0415 — routers ↔ server cycle
-    from cairn.core.workspace import Workspace, get_workspace_store  # noqa: PLC0415
+    from cairn.core.workspace import Workspace, cap_workspace_id, get_workspace_store  # noqa: PLC0415
 
     store = get_workspace_store()
-    base = _slug_workspace_id(company or acct.name) or acct.id
+    base = cap_workspace_id(_slug_workspace_id(company or acct.name) or acct.id)
     ws_id, n = base, 1
     while await store.get(ws_id) is not None:
         n += 1
-        ws_id = f"{base}-{n}"
+        ws_id = cap_workspace_id(base, f"-{n}")
     await store.put(Workspace(id=ws_id, name=company or acct.name, account_id=acct.id))
     # #1571 — whatever a new workspace starts with (the platform: a starter
     # budget) arrives the same way on the signup path as on POST /workspaces.
@@ -179,8 +179,8 @@ def build_accounts_router() -> APIRouter:
         cross-account read does; an id the caller's own account holds, 409. With no
         explicit ``id`` the id is the first free slug of the name, as for a new
         account's first workspace: two accounts may both call a workspace "Ops"."""
-        from cairn.core.workspace import DEFAULT_ACCOUNT, Workspace, get_workspace_store
-        ws_id = _slug_workspace_id(body.id or body.name)
+        from cairn.core.workspace import DEFAULT_ACCOUNT, Workspace, cap_workspace_id, get_workspace_store
+        ws_id = cap_workspace_id(_slug_workspace_id(body.id or body.name))
         if not ws_id:
             raise HTTPException(status_code=422, detail="workspace id/name must yield a non-empty slug")
         store = get_workspace_store()
@@ -189,7 +189,7 @@ def build_accounts_router() -> APIRouter:
             base, n = ws_id, 1
             while await store.get(ws_id) is not None:
                 n += 1
-                ws_id = f"{base}-{n}"
+                ws_id = cap_workspace_id(base, f"-{n}")
         existing = await store.get(ws_id)
         if existing is not None:
             if (existing.account_id or DEFAULT_ACCOUNT) != acct:
