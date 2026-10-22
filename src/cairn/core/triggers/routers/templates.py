@@ -8,7 +8,7 @@ from typing import Annotated, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from cairn.core.triggers import console_support as support
-from cairn.core.triggers.auth import is_env_admin, require_admin
+from cairn.core.triggers.auth import require_admin
 from cairn.core.workspace import current_workspace
 
 

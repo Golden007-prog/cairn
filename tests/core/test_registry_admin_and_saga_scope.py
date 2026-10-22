@@ -224,6 +224,23 @@ def test_a_handler_that_cannot_attribute_sagas_leaves_them_to_the_deployment_adm
     assert handler.decided == [(SAGA, True)]
 
 
+@pytest.mark.parametrize("answer", ["raise", "  "])
+def test_a_handler_whose_workspace_of_fails_or_is_blank_fails_closed(env, answer):
+    """An exception or a blank workspace id from ``workspace_of`` leaves the saga to
+    the deployment admin; it never reads as "no workspace asserted"."""
+    handler = _Handler()
+
+    async def _broken(workflow_id):
+        if answer == "raise":
+            raise RuntimeError("saga store unavailable")
+        return answer
+    handler.workspace_of = _broken
+    with env.client(handler) as c:
+        user = c.post(f"/triggers/approve/{SAGA}", json={"decision": "approve"}, headers=env.user(OWNER))
+    assert user.status_code == 404, (user.status_code, user.text)
+    assert handler.decided == []
+
+
 def test_the_deployment_admin_decides_any_saga(env):
     handler = _Handler()
     with env.client(handler) as c:

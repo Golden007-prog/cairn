@@ -59,9 +59,12 @@ async def _assert_may_decide_saga(handler: Any, workflow_id: str, token: Optiona
             logging.getLogger(__name__).warning("workspace_of(%s) failed; refusing the decision",
                                                 workflow_id, exc_info=True)
             ws = None
+    # A blank id would read as "no workspace asserted", which assert_workspace_allowed
+    # permits: normalise first so a handler answering "" or "  " also fails closed.
+    ws = str(ws).strip() if ws is not None else ""
     if ws:
         try:
-            await assert_workspace_allowed(str(ws), await support.caller_account(token))
+            await assert_workspace_allowed(ws, await support.caller_account(token))
             return
         except WorkspaceForbidden:
             pass
