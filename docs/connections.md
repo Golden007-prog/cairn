@@ -53,13 +53,20 @@ the caller passes `allow_private_network=True`. Only the deployment's own caller
 pass either. Without `allow_private_network` the spec also carries an
 `httpx_client_factory` whose client does not follow redirects, so the checked
 address is the only one the client connects to; with it the spec keeps the MCP
-SDK's default client.
+SDK's default client. A tenant spec therefore holds a callable and is not
+JSON-serialisable.
 
 A knowledge corpus source (`resolve_corpus_source`, `index_workspace_corpus`) is
 cloned only from a public `https://` git URL unless the caller passes
 `allow_local=True`. The clone is limited to https, does not follow redirects, and
 runs without the server's system or global git config (credential helpers, extra
-headers, URL rewrites) or a terminal prompt.
+headers, URL rewrites), credential helper, askpass or a terminal prompt. Its
+environment is an allowlist: `PATH`, `LANG` / `LC_*`, `TMPDIR`, the proxy
+variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, either case) and the CA
+variables (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `GIT_SSL_CAINFO`,
+`REQUESTS_CA_BUNDLE`); `HOME` and `XDG_CONFIG_HOME` point at an empty temporary
+directory. So a deployment that sets `http.proxy` or `http.sslCAInfo` only in its
+gitconfig must set the matching environment variable for tenant clones to use it.
 
 Known limits of the address guard, shared by the probe, MCP specs and corpus
 clones: it resolves the host once, before connecting, so it does not defend

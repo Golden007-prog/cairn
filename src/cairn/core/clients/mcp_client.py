@@ -89,7 +89,10 @@ def mcp_server_spec(
 
     Without ``allow_private_network`` the http/sse spec also carries
     ``httpx_client_factory=``:func:`no_redirect_http_client`, so the client
-    never follows a redirect past the check. With it the spec is unchanged
+    never follows a redirect past the check. Such a spec therefore holds a
+    callable and is not JSON-serialisable: pass it to ``MultiServerMCPClient``
+    (or :func:`discover_tools`) as is, rather than storing or logging it as
+    JSON. With ``allow_private_network`` the spec is unchanged
     (the SDK's default client, which follows redirects): the deployment already
     trusts where it points. Known limits of the address check: it resolves the
     host once, at spec-build time, so it does not defend against DNS
