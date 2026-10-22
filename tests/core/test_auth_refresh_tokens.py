@@ -117,6 +117,12 @@ def _logout(c, raw=None, headers=REFRESH_HEADERS):
     return c.post("/auth/logout", headers={**headers, **extra})
 
 
+def _advance(monkeypatch, seconds: float) -> None:
+    """Move the refresh-token module's clock ``seconds`` ahead of real time."""
+    real = datetime.now
+    monkeypatch.setattr(RT, "_now", lambda: real(timezone.utc) + timedelta(seconds=seconds))
+
+
 def _row(raw):
     return asyncio.run(RT.default_refresh_token_store().get(RT.hash_token(raw)))
 
@@ -195,9 +201,10 @@ def test_refresh_rotates_and_re_mints_the_same_claims(client):
     assert _refresh(client, new["value"]).status_code == 200, "the new token rotates in turn"
 
 
-def test_reusing_a_rotated_token_revokes_the_whole_family(client, caplog):
+def test_reusing_a_rotated_token_revokes_the_whole_family(client, caplog, monkeypatch):
     a = _cookie(_login(client))["value"]
     b = _cookie(_refresh(client, a))["value"]
+    _advance(monkeypatch, RT.REUSE_GRACE_SECONDS + 1)  # past the grace window (ADR-0144)
     with caplog.at_level(logging.WARNING, logger="cairn.core.refresh_tokens"):
         reuse = _refresh(client, a)
     assert reuse.status_code == 401 and "reused" in reuse.json()["detail"]
@@ -211,6 +218,40 @@ def test_reusing_a_rotated_token_revokes_the_whole_family(client, caplog):
     assert len(warned) == 1 and "sub=admin" in warned[0] and f"family={family[:8]}" in warned[0]
     for secret in (a, b, RT.hash_token(a), RT.hash_token(b), family):
         assert secret not in warned[0]
+
+
+def test_a_replay_within_the_grace_window_renews(client, caplog):
+    """ADR-0144: the browser lost the response to a refresh and sends the cookie
+    it still holds. It renews: the child it never stored is revoked, a sibling
+    takes its place, the family stays alive, and it is logged at INFO."""
+    a = _cookie(_login(client))["value"]
+    b = _cookie(_refresh(client, a))["value"]
+    with caplog.at_level(logging.INFO, logger="cairn.core.refresh_tokens"):
+        again = _refresh(client, a)
+    assert again.status_code == 200, again.text
+    assert decode_claims(again.json()["access_token"])["sub"] == "admin"
+    c = _cookie(again)["value"]
+    assert c not in (a, b)
+    assert _row(b).revoked_at, "the child the browser never stored is revoked"
+    assert _row(a).replaced_by == RT.hash_token(c) and _row(c).revoked_at is None
+    assert _row(c).family_id == _row(a).family_id
+    assert _refresh(client, b).status_code == 401
+    assert _refresh(client, c).status_code == 200, "the family is alive"
+    records = [r for r in caplog.records if r.name == "cairn.core.refresh_tokens"]
+    assert [r.levelno for r in records] == [logging.INFO]
+    msg = records[0].getMessage()
+    family = _row(a).family_id
+    assert "sub=admin" in msg and f"family={family[:8]}" in msg
+    for secret in (a, b, c, RT.hash_token(a), RT.hash_token(b), family):
+        assert secret not in msg
+
+
+def test_a_replay_after_logout_is_refused_even_within_the_window(client):
+    a = _cookie(_login(client))["value"]
+    b = _cookie(_refresh(client, a))["value"]
+    assert _logout(client, b).status_code == 204
+    r = _refresh(client, a)
+    assert r.status_code == 401 and "revoked" in r.json()["detail"]
 
 
 def test_an_expired_token_is_refused(client):
@@ -420,7 +461,7 @@ def store(request, tmp_path):
         yield RT.PostgresRefreshTokenStore(dsn=_pg_dsn())
 
 
-def test_store_parity(store):
+def test_store_parity(store, monkeypatch):
     async def go():
         sub = f"user-{uuid.uuid4().hex}"
         raw, row = await RT.issue(sub, None, remember=False, store=store)
@@ -432,6 +473,7 @@ def test_store_parity(store):
         used = await store.get(row.token_hash)
         assert used.used_at and used.replaced_by == row2.token_hash
         assert await store.mark_used(row.token_hash, at="x", replaced_by="y") is False, "compare-and-set"
+        _advance(monkeypatch, RT.REUSE_GRACE_SECONDS + 1)
         with pytest.raises(RT.RefreshError, match="reused"):
             await RT.validate(raw, store=store)
         assert (await store.get(row2.token_hash)).revoked_at, "reuse revoked the family"
@@ -449,10 +491,36 @@ def test_store_parity(store):
     asyncio.run(go())
 
 
-def test_two_concurrent_rotations_of_one_token_one_wins_and_the_family_is_revoked(store):
-    """Two refreshes with the same cookie at once (two tabs, or a stolen copy):
-    the compare-and-set lets exactly one rotate, the other is reuse, and the
-    whole family, the winner's new token included, ends revoked."""
+async def _live(store, *rows) -> list:
+    return [r for r in rows if (await store.get(r.token_hash)).revoked_at is None]
+
+
+def test_two_concurrent_rotations_the_loser_within_the_window_gets_a_sibling(store):
+    """Two refreshes with the same cookie at once (two tabs): one wins the
+    compare-and-set, the other is a replay within the grace window (ADR-0144)
+    and gets a sibling. Both answers carry a token, and exactly one is live:
+    the parent's only child."""
+    async def go():
+        raw, row = await RT.issue(f"user-{uuid.uuid4().hex}", "acme", remember=True, store=store)
+        live = await RT.validate(raw, store=store)
+        results = await asyncio.gather(RT.rotate(live, store=store), RT.rotate(live, store=store),
+                                       return_exceptions=True)
+        assert not [r for r in results if isinstance(r, BaseException)], results
+        children = [r[1] for r in results]
+        alive = await _live(store, *children)
+        assert len(alive) == 1, "only one live child per parent"
+        assert (await store.get(row.token_hash)).replaced_by == alive[0].token_hash
+        assert (await store.get(row.token_hash)).revoked_at is None, "the family is alive"
+        raw_alive = next(r[0] for r in results if r[1] == alive[0])
+        assert await RT.validate(raw_alive, store=store) == alive[0]
+    asyncio.run(go())
+
+
+def test_two_concurrent_rotations_outside_the_window_revoke_the_family(store, monkeypatch):
+    """With no grace window the pre-ADR-0144 rule holds: the loser is reuse and
+    the whole family, the winner's new token included, ends revoked."""
+    monkeypatch.setattr(RT, "REUSE_GRACE_SECONDS", 0)
+
     async def go():
         raw, row = await RT.issue(f"user-{uuid.uuid4().hex}", "acme", remember=True, store=store)
         live = await RT.validate(raw, store=store)
@@ -464,17 +532,70 @@ def test_two_concurrent_rotations_of_one_token_one_wins_and_the_family_is_revoke
         assert isinstance(lost[0], RT.RefreshError) and lost[0].reason == "reused"
         new_raw, new_row = won[0]
         assert (await store.get(new_row.token_hash)).revoked_at, "the winner's token is revoked too"
-        assert (await store.get(row.token_hash)).revoked_at
         with pytest.raises(RT.RefreshError, match="revoked"):
             await RT.validate(new_raw, store=store)
     asyncio.run(go())
 
 
-def test_the_winners_token_is_revoked_even_when_the_loser_revokes_first():
+def test_replays_within_the_window_keep_one_live_child(store):
+    """ADR-0144: a replay renews as a sibling and revokes the previous child; a
+    second replay of the same parent does it again. Never two live children."""
+    async def go():
+        raw, row = await RT.issue(f"user-{uuid.uuid4().hex}", "acme", remember=True, store=store)
+        _, c1 = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        raw2, c2 = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        raw3, c3 = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        assert await _live(store, c1, c2, c3) == [c3]
+        parent = await store.get(row.token_hash)
+        assert parent.replaced_by == c3.token_hash and parent.revoked_at is None
+        with pytest.raises(RT.RefreshError, match="revoked"):
+            await RT.validate(raw2, store=store)
+        _, d = await RT.rotate(await RT.validate(raw3, store=store), store=store)
+        assert d.family_id == row.family_id and (await store.get(d.token_hash)).revoked_at is None
+    asyncio.run(go())
+
+
+def test_a_replay_after_the_window_revokes_the_family(store, monkeypatch):
+    async def go():
+        raw, row = await RT.issue(f"user-{uuid.uuid4().hex}", "acme", remember=True, store=store)
+        _, c1 = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        _advance(monkeypatch, RT.REUSE_GRACE_SECONDS + 1)
+        with pytest.raises(RT.RefreshError, match="reused"):
+            await RT.validate(raw, store=store)
+        assert (await store.get(c1.token_hash)).revoked_at, "the family is revoked"
+    asyncio.run(go())
+
+
+def test_a_replay_of_a_parent_whose_child_was_already_rotated_revokes_the_family(store):
+    """Renewing beside a child that already has a successor would leave two live
+    chains, so that replay is reuse, window or not."""
+    async def go():
+        raw, row = await RT.issue(f"user-{uuid.uuid4().hex}", "acme", remember=True, store=store)
+        raw1, c1 = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        _, d1 = await RT.rotate(await RT.validate(raw1, store=store), store=store)
+        with pytest.raises(RT.RefreshError, match="reused"):
+            await RT.rotate(await RT.validate(raw, store=store), store=store)
+        assert (await store.get(d1.token_hash)).revoked_at, "the grandchild's chain is revoked"
+    asyncio.run(go())
+
+
+def test_a_replay_after_the_family_was_signed_out_is_refused(store):
+    async def go():
+        raw, row = await RT.issue(f"user-{uuid.uuid4().hex}", "acme", remember=True, store=store)
+        raw1, c1 = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        assert await RT.revoke_family_of(raw1, store=store) is True
+        with pytest.raises(RT.RefreshError, match="revoked"):
+            await RT.validate(raw, store=store)
+    asyncio.run(go())
+
+
+def test_the_winners_token_is_revoked_even_when_the_loser_revokes_first(monkeypatch):
     """The interleaving ``gather`` alone does not force: the winner's
     compare-and-set succeeds, then the loser fails its own and revokes the family
     BEFORE the winner continues. The winner's new token must already be in the
-    family by then (written before the compare-and-set), or it survives."""
+    family by then (written before the compare-and-set), or it survives. Outside
+    the grace window, where the loser revokes (ADR-0144)."""
+    monkeypatch.setattr(RT, "REUSE_GRACE_SECONDS", 0)
     class Paused(RT.InMemoryRefreshTokenStore):
         def __init__(self) -> None:
             super().__init__()

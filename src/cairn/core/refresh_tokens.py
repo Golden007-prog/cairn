@@ -17,6 +17,13 @@ What a row is:
   (``used_at``, ``replaced_by``) and issues the next row in the same family.
 * Presenting a row that was already used is **reuse**: someone holds a copy of a
   rotated token, so the whole family is revoked and both copies stop working.
+  Except within :data:`REUSE_GRACE_SECONDS` of that row's own rotation
+  (ADR-0144): a browser that lost the response (a dropped connection, two tabs
+  refreshing at once) replays the cookie it still holds, so the replay renews
+  instead. The child the row was rotated into is revoked (the browser never
+  stored it) and a sibling takes its place: a parent never has more than one
+  live child, and a child that was itself already rotated makes the replay
+  reuse after all.
 * The family's lifetime is fixed when it starts: ``CAIRN_REFRESH_TOKEN_DAYS``
   (default 30) when the sign-in asked to be remembered, :data:`SESSION_HOURS`
   otherwise. A rotated row inherits its family's ``expires_at``.
@@ -27,7 +34,8 @@ Storage is the usual triad (InMemory / Sqlite / Postgres) selected by
 ``CAIRN_STORAGE``, in the shared ``cairn.db`` for SQLite. Real columns rather
 than a JSON blob, because rotation is a compare-and-set
 (``UPDATE … WHERE used_at IS NULL AND revoked_at IS NULL``): of two concurrent
-refreshes with the same token exactly one wins, and the other is reuse.
+refreshes with the same token exactly one wins the rotation, and the other
+takes the replay path above.
 Tokens belong to a user, not to a workspace, so the table has no workspace
 column.
 """
@@ -56,6 +64,10 @@ DEFAULT_REMEMBER_DAYS = 30
 #: How long a sign-in that was not remembered lasts on the server (its cookie is a
 #: session cookie, so a browser restart also ends it).
 SESSION_HOURS = 12
+#: ADR-0144 — a rotated token presented again within this many seconds of its own
+#: rotation renews (a lost response, two tabs) instead of ending the sign-in.
+#: A constant by decision, not a setting.
+REUSE_GRACE_SECONDS = 10
 
 
 def remember_days() -> int:
@@ -142,6 +154,20 @@ class InMemoryRefreshTokenStore:
         self._rows[token_hash] = tok.model_copy(update={"used_at": at, "replaced_by": replaced_by})
         return True
 
+    async def revoke_unused(self, token_hash: str, *, at: str) -> bool:
+        tok = self._rows.get(token_hash)
+        if tok is None or tok.used_at is not None or tok.revoked_at is not None:
+            return False
+        self._rows[token_hash] = tok.model_copy(update={"revoked_at": at})
+        return True
+
+    async def set_replaced_by(self, token_hash: str, *, expected: str, new: str) -> bool:
+        tok = self._rows.get(token_hash)
+        if tok is None or tok.replaced_by != expected or tok.revoked_at is not None:
+            return False
+        self._rows[token_hash] = tok.model_copy(update={"replaced_by": new})
+        return True
+
     async def revoke_family(self, family_id: str, *, at: str) -> int:
         return self._revoke(lambda t: t.family_id == family_id, at)
 
@@ -215,6 +241,28 @@ class SqliteRefreshTokenStore:
                 "UPDATE refresh_tokens SET used_at=?, replaced_by=? "
                 "WHERE token_hash=? AND used_at IS NULL AND revoked_at IS NULL",
                 (at, replaced_by, token_hash),
+            )
+            self._conn.commit()
+            return cur.rowcount == 1
+        return await self._run(_u)
+
+    async def revoke_unused(self, token_hash: str, *, at: str) -> bool:
+        def _u() -> bool:
+            cur = self._conn.execute(
+                "UPDATE refresh_tokens SET revoked_at=? "
+                "WHERE token_hash=? AND used_at IS NULL AND revoked_at IS NULL",
+                (at, token_hash),
+            )
+            self._conn.commit()
+            return cur.rowcount == 1
+        return await self._run(_u)
+
+    async def set_replaced_by(self, token_hash: str, *, expected: str, new: str) -> bool:
+        def _u() -> bool:
+            cur = self._conn.execute(
+                "UPDATE refresh_tokens SET replaced_by=? "
+                "WHERE token_hash=? AND replaced_by=? AND revoked_at IS NULL",
+                (new, token_hash, expected),
             )
             self._conn.commit()
             return cur.rowcount == 1
@@ -303,6 +351,26 @@ class PostgresRefreshTokenStore(PgSchemaInit):
             )
         return status.split()[-1] == "1"  # asyncpg returns e.g. "UPDATE 1"
 
+    async def revoke_unused(self, token_hash: str, *, at: str) -> bool:
+        pool = await self._get_pool()
+        async with pool.acquire() as c:
+            status = await c.execute(
+                "UPDATE refresh_tokens SET revoked_at=$1 "
+                "WHERE token_hash=$2 AND used_at IS NULL AND revoked_at IS NULL",
+                at, token_hash,
+            )
+        return status.split()[-1] == "1"
+
+    async def set_replaced_by(self, token_hash: str, *, expected: str, new: str) -> bool:
+        pool = await self._get_pool()
+        async with pool.acquire() as c:
+            status = await c.execute(
+                "UPDATE refresh_tokens SET replaced_by=$1 "
+                "WHERE token_hash=$2 AND replaced_by=$3 AND revoked_at IS NULL",
+                new, token_hash, expected,
+            )
+        return status.split()[-1] == "1"
+
     async def revoke_family(self, family_id: str, *, at: str) -> int:
         return await self._revoke("family_id", family_id, at)
 
@@ -362,16 +430,26 @@ async def issue(sub: str, account_id: Optional[str], *, remember: bool,
     return raw, row
 
 
+def _within_grace(row: RefreshToken, now: datetime) -> bool:
+    """Whether ``row`` was rotated less than :data:`REUSE_GRACE_SECONDS` ago."""
+    if row.used_at is None:
+        return False
+    return (now - datetime.fromisoformat(row.used_at)).total_seconds() < REUSE_GRACE_SECONDS
+
+
 async def validate(raw: str, *, store: Any = None) -> RefreshToken:
-    """The live row for ``raw``, or :class:`RefreshError`. A row that was already
-    rotated is reuse: its whole family is revoked before refusing."""
+    """The row for ``raw`` if it may be refreshed, or :class:`RefreshError`.
+
+    A row that was already rotated is reuse, and its whole family is revoked
+    before refusing, unless it was rotated less than :data:`REUSE_GRACE_SECONDS`
+    ago (ADR-0144): then it is returned, and :func:`rotate` renews it as a replay."""
     store = store or default_refresh_token_store()
     row = await store.get(hash_token(raw)) if raw else None
     if row is None:
         raise RefreshError("unknown")
     if row.revoked_at is not None:
         raise RefreshError("revoked")
-    if row.used_at is not None:
+    if row.used_at is not None and not _within_grace(row, _now()):
         await revoke_family(row, reason="reuse of a rotated token", store=store)
         raise RefreshError("reused")
     if row.seconds_left() <= 0:
@@ -381,14 +459,15 @@ async def validate(raw: str, *, store: Any = None) -> RefreshToken:
 
 async def rotate(row: RefreshToken, *, store: Any = None) -> tuple[str, RefreshToken]:
     """Mark ``row`` used and issue the next token in its family (same expiry).
-    If ``row`` was used or revoked in the meantime (a concurrent refresh with the
-    same token), that is reuse: the family is revoked and :class:`RefreshError`
-    raised.
 
     The next row is written BEFORE the compare-and-set. A loser's revocation
     runs only after the winner's compare-and-set, so it always finds the
     winner's new row in place and revokes it too; written after, the winner's
-    row could land behind the revocation and keep the family alive."""
+    row could land behind the revocation and keep the family alive.
+
+    If ``row`` was already rotated (a replay, or a concurrent refresh that won the
+    compare-and-set), :func:`_renew_replay` decides: within the grace window the
+    new row replaces ``row``'s child as a sibling; otherwise it is reuse."""
     store = store or default_refresh_token_store()
     now = _iso(_now())
     raw = _new_raw()
@@ -397,10 +476,49 @@ async def rotate(row: RefreshToken, *, store: Any = None) -> tuple[str, RefreshT
         "used_at": None, "replaced_by": None, "revoked_at": None,
     })
     await store.insert(nxt)
-    if not await store.mark_used(row.token_hash, at=now, replaced_by=nxt.token_hash):
-        await revoke_family(row, reason="token used or revoked during the refresh", store=store)
-        raise RefreshError("reused")
-    return raw, nxt
+    if row.used_at is None and await store.mark_used(row.token_hash, at=now, replaced_by=nxt.token_hash):
+        return raw, nxt
+    return raw, await _renew_replay(row, nxt, store=store)
+
+
+#: How many times a replay re-reads its parent when another replay of the same
+#: parent changed it in between. Each retry follows a change someone else made.
+_REPLAY_ATTEMPTS = 5
+
+
+async def _renew_replay(row: RefreshToken, nxt: RefreshToken, *, store: Any) -> RefreshToken:
+    """``row`` was already rotated; make ``nxt`` (already written, unused) its
+    only live child, or refuse (ADR-0144).
+
+    Within :data:`REUSE_GRACE_SECONDS` of ``row``'s rotation, and while its family
+    is live: revoke the child ``row`` was rotated into, but only while that child
+    is unused (the conditional revoke is the lock: of two concurrent replays only
+    one revokes a given child), then point ``row`` at ``nxt``. A child that was
+    already used means a second chain grows from it, so that is reuse. Outside
+    the window it is reuse. Reuse revokes the family, as before."""
+    for _ in range(_REPLAY_ATTEMPTS):
+        now = _now()
+        parent = await store.get(row.token_hash)
+        if parent is None or parent.revoked_at is not None:
+            await store.revoke_unused(nxt.token_hash, at=_iso(now))
+            raise RefreshError("revoked")
+        if not _within_grace(parent, now):
+            await revoke_family(parent, reason="reuse of a rotated token", store=store)
+            raise RefreshError("reused")
+        child = parent.replaced_by or ""
+        if child and not await store.revoke_unused(child, at=_iso(now)):
+            current = await store.get(child)
+            if current is not None and current.used_at is not None:
+                await revoke_family(parent, reason="replay of a token whose child was already rotated",
+                                    store=store)
+                raise RefreshError("reused")
+            continue  # another replay revoked that child first: re-read the parent
+        if await store.set_replaced_by(parent.token_hash, expected=child, new=nxt.token_hash):
+            logger.info("refresh token replayed within %ss of its rotation, renewed: sub=%s family=%s…",
+                        REUSE_GRACE_SECONDS, parent.sub, parent.family_id[:8])
+            return nxt
+    await revoke_family(row, reason="replays of one token kept racing", store=store)
+    raise RefreshError("reused")
 
 
 async def revoke_family(row: RefreshToken, *, reason: str, store: Any = None) -> int:
@@ -440,6 +558,7 @@ __all__ = [
     "PostgresRefreshTokenStore",
     "RefreshError",
     "RefreshToken",
+    "REUSE_GRACE_SECONDS",
     "SESSION_HOURS",
     "SqliteRefreshTokenStore",
     "default_refresh_token_store",
