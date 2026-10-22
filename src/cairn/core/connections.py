@@ -420,19 +420,32 @@ def connection_from_provider(
     secrets: Optional[dict[str, str]] = None,
     description: Optional[str] = None,
     enabled: bool = True,
+    account_id: Optional[str] = None,
 ) -> Connection:
     """Build a :class:`Connection` from a catalog provider, layering caller
     overrides on top of the spec defaults. Raises ``KeyError`` if the provider
-    is not in the catalog (after alias resolution)."""
+    is not in the catalog (after alias resolution).
+
+    ``account_id`` stamps the owning account. For a tenant account (not the
+    deployment's ``default``) the catalog's secret defaults, which name server
+    environment variables, are not applied, and a caller-supplied secret ref must
+    be one minted for that account (``ValueError`` otherwise)."""
+    from cairn.core.secrets_store import ref_in_account, scoped_account  # lazy: crypto off import path
+
     key = resolve_provider_key(provider)
     if key is None:
         raise KeyError(provider)
     spec = PROVIDER_CATALOG[key]
+    tenant = scoped_account(account_id) is not None
+    for logical, ref in (secrets or {}).items():
+        if not ref_in_account(str(ref), account_id):
+            raise ValueError(f"secret {logical!r}: only a reference stored for this account is accepted")
     return Connection(
         name=name or spec.provider,
         kind=spec.kind,
+        account_id=account_id or DEFAULT_ACCOUNT,
         config={**spec.config, **(config or {})},
-        secrets={**spec.secrets, **(secrets or {})},
+        secrets={**({} if tenant else spec.secrets), **(secrets or {})},
         description=spec.description if description is None else description,
         enabled=enabled,
     )
@@ -858,9 +871,17 @@ async def resolve_connection_obj(conn: Connection) -> Optional[ResolvedConnectio
     bound SecretStore (ADR-0033), falling back to ``os.environ``. Returns
     ``None`` if the connection is disabled. Split out from
     :func:`resolve_connection` so callers that already hold the row (e.g. the
-    health prober) don't re-hit the store."""
+    health prober) don't re-hit the store.
+
+    The row's ``account_id`` scopes resolution: a tenant account's connection
+    resolves only references minted for that account (no bound SecretStore, no
+    ``os.environ`` fallback, no other account's), and its oauth token is looked up
+    under its own id. The deployment's (``default``) connections are unchanged."""
     if not conn.enabled:
         return None
+    from cairn.core.secrets_store import scoped_account  # lazy: crypto off import path
+
+    tenant = scoped_account(conn.account_id) is not None
 
     # kind=oauth: a broker (#100) owns the auth-code dance + token refresh.
     # Hand back a FRESH access token instead of resolving static secret refs, so
@@ -874,7 +895,8 @@ async def resolve_connection_obj(conn: Connection) -> Optional[ResolvedConnectio
         broker = get_oauth_broker(conn.config.get("broker"))
         token = await broker.get_access_token(
             provider=str(conn.config.get("provider", "")),
-            connection_id=str(conn.config.get("connection_id") or conn.name),
+            # a tenant's connection reads its own token, never one another row names
+            connection_id=conn.name if tenant else str(conn.config.get("connection_id") or conn.name),
         )
         return ResolvedConnection(
             name=conn.name,
@@ -886,6 +908,12 @@ async def resolve_connection_obj(conn: Connection) -> Optional[ResolvedConnectio
     # Lazy: avoid import-time coupling to the operator/secret stack.
     from cairn.core.operator.secrets import get_secret_provider
     from cairn.core.secrets_store import resolve_secret  # writable backends (#200)
+
+    if tenant:
+        resolved = {
+            key: resolve_secret(ref, account_id=conn.account_id) or "" for key, ref in conn.secrets.items()
+        }
+        return ResolvedConnection(name=conn.name, kind=conn.kind, config=dict(conn.config), secrets=resolved)
 
     provider = get_secret_provider()
     resolved: dict[str, str] = {}
