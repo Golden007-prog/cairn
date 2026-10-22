@@ -148,10 +148,13 @@ class InMemoryTriggerStore:
 def _conn_locked(fn):
     """#163 — one ``sqlite3`` connection, shared across threads
     (``check_same_thread=False``): every use holds the store's thread lock. The
-    asyncio lock serializes callers on one event loop only. ``list_sync`` is
-    also called directly from the synchronous router build, and ``close`` can
-    race an in-flight read, so two threads could drive the connection at once,
-    which crashes CPython's sqlite3 module (a segfault, not an exception)."""
+    asyncio lock serializes callers on one event loop only: a cached instance
+    (``StorageBackend.triggers``) used from two event loops, as test clients'
+    portal threads do, a cancelled ``to_thread`` whose worker keeps running, a
+    direct ``list_sync`` call, or ``close`` racing an in-flight read could each
+    drive the connection from two threads at once, which crashes CPython's
+    sqlite3 module (a segfault, not an exception). An RLock: re-entrant on
+    purpose (a locked caller may read again)."""
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
         with self._conn_lock:
@@ -163,9 +166,9 @@ class SqliteTriggerStore:
     """Embedded-SQLite store — restart-safe, single file. Mirrors
     :class:`~cairn.core.connections.SqliteConnectionStore`: the full
     :class:`StoredTrigger` serializes to a JSON ``data`` blob, async ops run via
-    ``asyncio.to_thread`` under a lock so they never block the event loop. The
-    load/merge path (router build, synchronous) uses :meth:`list_sync` — WAL +
-    ``check_same_thread=False`` make concurrent reads safe."""
+    ``asyncio.to_thread`` so they never block the event loop. The load/merge path
+    (router build, synchronous) uses :meth:`list_sync`. WAL does NOT make one
+    shared connection safe across threads: every use holds ``_conn_lock`` (#163)."""
 
     def __init__(self, path: str | None = None) -> None:
         import sqlite3  # stdlib, but the connection is an instance handle

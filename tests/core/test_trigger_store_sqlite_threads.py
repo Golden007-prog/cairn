@@ -42,10 +42,11 @@ def test_concurrent_reads_and_writes_on_one_connection_do_not_crash(tmp_path):
     for t in readers + writers:
         t.start()
     for t in writers:
-        t.join()
+        t.join(timeout=60)
     stop.set()
     for t in readers:
-        t.join()
+        t.join(timeout=60)
+    assert not any(t.is_alive() for t in readers + writers), "a thread hung on the store"
 
     assert errors == []
     assert len(store.list_sync()) == 450
@@ -54,7 +55,8 @@ def test_concurrent_reads_and_writes_on_one_connection_do_not_crash(tmp_path):
 
 def test_close_waits_for_an_in_flight_read(tmp_path):
     """``close`` holds the same lock, so it cannot pull the connection out from
-    under a read on another thread."""
+    under a read on another thread. (On a tree without the lock this fails with
+    AttributeError, so the close race itself is proven by the test above.)"""
     store = SqliteTriggerStore(path=str(tmp_path / "triggers.db"))
     for i in range(50):
         store._create_sync(_row(i))
