@@ -107,11 +107,10 @@ def workspace_collection(name: str, workspace_id: Optional[str] = None) -> str:
     never fold one workspace onto another (SQLite and Postgres table names are
     also case-insensitive, hence the lowercase-only slug rule).
 
-    Concurrency caveat (deferred to SaaS activation, #224 H): the vector stores
-    hold the active collection as mutable instance state on a process-cached
-    store, so *concurrent* different-workspace requests in one process need
-    per-workspace store instances (or a per-call collection arg). Namespacing is
-    correct for single-workspace and sequential multi-workspace access today.
+    Concurrency: the vector stores hold the active collection as instance state.
+    The process-wide RAG and memory stores are therefore used one collection
+    operation at a time (``cairn.services.rag.stores.on_collection``), and the
+    ``rag/search`` / ``memory/search`` operators keep one store per collection.
     """
     ws = (workspace_id or current_workspace()).strip() or DEFAULT_WORKSPACE
     if ws == DEFAULT_WORKSPACE:

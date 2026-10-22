@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from contextlib import nullcontext
 
 from pydantic import BaseModel, Field
 
@@ -113,49 +114,52 @@ async def index_corpus(
     )
 
     # Vector store handle for tombstoning + forced re-embed. Lazy so a no-op
-    # plan needs no store/embedder init.
+    # plan needs no store/embedder init. The store is process-wide: the whole run
+    # works on `coll` under the store's lock (`ingest_document` re-enters it).
     store = None
+    scope = nullcontext()
     if p.to_index or p.to_delete:
         from cairn.services.rag.embeddings import get_embedder
-        from cairn.services.rag.stores import get_vector_store
+        from cairn.services.rag.stores import get_vector_store, on_collection
 
         await apply_backend_connection("rag_vector_store")  # #336: bound-connection creds → env
         store = get_vector_store()
-        await store.initialize(coll, get_embedder().dim)
+        scope = on_collection(store, coll, get_embedder().dim)
 
-    # Tombstone removed sources.
-    for source in p.to_delete:
-        try:
-            await store.delete_by_source(source)
-            await catalog.tombstone(document_id(cat_corpus, source))
-            result.documents_deleted += 1
-        except Exception as e:  # noqa: BLE001
-            result.failed_documents.append({"source": source, "op": "delete", "error": str(e)})
+    async with scope:
+        # Tombstone removed sources.
+        for source in p.to_delete:
+            try:
+                await store.delete_by_source(source)
+                await catalog.tombstone(document_id(cat_corpus, source))
+                result.documents_deleted += 1
+            except Exception as e:  # noqa: BLE001
+                result.failed_documents.append({"source": source, "op": "delete", "error": str(e)})
 
-    # (Re)index changed/new sources. delete_by_source first so the pipeline's
-    # has_source skip doesn't block a re-embed.
-    for source in p.to_index:
-        did = document_id(cat_corpus, source)
-        try:
-            await store.delete_by_source(source)
-            outcome = await ingest_document(source, coll)
-            m = _STORED_RE.search(outcome or "")
-            chunks = int(m.group(1)) if m else 0
-            result.chunks_indexed += chunks
-            result.documents_indexed += 1
-            await catalog.upsert(CatalogEntry(
-                document_id=did, corpus=cat_corpus, source=source,
-                content_hash=live[source], build_fingerprint=build_fp,
-                chunk_count=chunks, status="indexed", indexed_at=utc_now_iso(),
-            ))
-        except Exception as e:  # noqa: BLE001 — isolate per-document failures
-            logger.warning("[index] failed: %s (%s)", source, e)
-            result.failed_documents.append({"source": source, "op": "index", "error": str(e)})
-            await catalog.upsert(CatalogEntry(
-                document_id=did, corpus=cat_corpus, source=source,
-                content_hash=live.get(source, ""), build_fingerprint=build_fp,
-                status="failed", indexed_at=utc_now_iso(), error=str(e),
-            ))
+        # (Re)index changed/new sources. delete_by_source first so the pipeline's
+        # has_source skip doesn't block a re-embed.
+        for source in p.to_index:
+            did = document_id(cat_corpus, source)
+            try:
+                await store.delete_by_source(source)
+                outcome = await ingest_document(source, coll)
+                m = _STORED_RE.search(outcome or "")
+                chunks = int(m.group(1)) if m else 0
+                result.chunks_indexed += chunks
+                result.documents_indexed += 1
+                await catalog.upsert(CatalogEntry(
+                    document_id=did, corpus=cat_corpus, source=source,
+                    content_hash=live[source], build_fingerprint=build_fp,
+                    chunk_count=chunks, status="indexed", indexed_at=utc_now_iso(),
+                ))
+            except Exception as e:  # noqa: BLE001 — isolate per-document failures
+                logger.warning("[index] failed: %s (%s)", source, e)
+                result.failed_documents.append({"source": source, "op": "index", "error": str(e)})
+                await catalog.upsert(CatalogEntry(
+                    document_id=did, corpus=cat_corpus, source=source,
+                    content_hash=live.get(source, ""), build_fingerprint=build_fp,
+                    status="failed", indexed_at=utc_now_iso(), error=str(e),
+                ))
 
     if result.failed_documents:
         result.status = "partially_completed" if result.documents_indexed else "failed"

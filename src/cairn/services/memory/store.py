@@ -16,8 +16,10 @@ similarity merges payloads (string fields: longer wins; list fields: union).
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import logging
+import threading
 from functools import lru_cache
 from typing import Any
 
@@ -26,12 +28,17 @@ from cairn.core.backend_connections import apply_backend_connection
 from cairn.core.provider_settings import get_settings
 from cairn.core.workspace import workspace_collection
 from cairn.services.rag.embeddings import get_embedder
-from cairn.services.rag.stores import build_vector_store
+from cairn.services.rag.stores import build_vector_store, on_collection
 
 logger = logging.getLogger(__name__)
 
 DEDUP_THRESHOLD = 0.85
 _RECORD_TYPE = "episodic_memory"
+
+#: Guards the process-wide memory store (:func:`_get_store`), which every
+#: workspace's memory collection shares: each save/recall/list runs whole on its
+#: collection under this lock (:func:`on_collection`).
+_STORE_LOCK = threading.Lock()
 
 
 @lru_cache(maxsize=1)
@@ -64,23 +71,43 @@ def _generic_merge(existing: dict, new: dict) -> dict:
     return merged
 
 
-async def _ensure_collection() -> None:
+async def _apply_store_connections() -> None:
     # #336: resolve profile-bound store connections (memory's own, and the RAG
     # store it inherits from by default) into the env BEFORE the cached store
     # is built; unbound → env fallback unchanged.
     await apply_backend_connection("rag_vector_store")
     await apply_backend_connection("memory_vector_store")
+
+
+async def _ensure_collection() -> None:
+    await _apply_store_connections()
     s = get_settings()
     store = _get_store()
     embedder = get_embedder()
     # Namespace episodic memory by workspace (#237) so one tenant never recalls
     # another's memories. save/recall/list call this first, so the shared store's
     # active collection (`self._coll`) is the workspace's. Default unchanged.
-    # Concurrency caveat (#224 H): a process-cached store holds one active
-    # collection — concurrent cross-workspace recalls need per-workspace stores.
-    await store.initialize(workspace_collection(s.memory_collection_name), embedder.dim)
+    # The store is process-wide, so they run whole under `_STORE_LOCK`, which
+    # this re-enters.
+    async with on_collection(store, workspace_collection(s.memory_collection_name), embedder.dim, _STORE_LOCK):
+        pass
 
 
+def _one_operation(fn):
+    """Run ``fn`` (a save/recall/list) whole on the workspace's memory collection
+    under the memory store's lock; :func:`_ensure_collection` inside re-enters it."""
+
+    @functools.wraps(fn)
+    async def _locked(*args, **kwargs):
+        await _apply_store_connections()  # before the cached store is built (#336)
+        coll = workspace_collection(get_settings().memory_collection_name)
+        async with on_collection(_get_store(), coll, get_embedder().dim, _STORE_LOCK):
+            return await fn(*args, **kwargs)
+
+    return _locked
+
+
+@_one_operation
 async def save_episodic(
     payload: dict[str, Any],
     *,
@@ -136,6 +163,7 @@ async def save_episodic(
     return {"action": "created", "id": mid, "detail": "New memory stored"}
 
 
+@_one_operation
 async def recall_episodic(
     query: str,
     *,
@@ -154,6 +182,7 @@ async def recall_episodic(
     return [hit for hit in results if hit.get("type") == _RECORD_TYPE][:top_k]
 
 
+@_one_operation
 async def list_episodic(limit: int = 20) -> list[dict[str, Any]]:
     """List stored episodic memories (via the backend's ``list_sources``)."""
     await _ensure_collection()

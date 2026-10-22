@@ -18,7 +18,7 @@ from cairn.core.backend_connections import apply_backend_connection
 from cairn.core.workspace import workspace_collection
 from cairn.services.rag.embeddings import EmbeddingProvider, get_embedder
 from cairn.services.rag.schemas import QueryResponse, SourceNode
-from cairn.services.rag.stores import get_vector_store
+from cairn.services.rag.stores import get_vector_store, on_collection
 from cairn.services.rag.stores.base import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -210,18 +210,22 @@ async def search(
     # idempotent + default-workspace unchanged.
     collection = workspace_collection(collection or s.rag_collection_name)
 
+    # The store is process-wide: the whole query runs on this collection under
+    # the store's lock, so no other caller selects another collection meanwhile.
+    ready = False
     try:
-        await store.initialize(collection, embedder.dim)
+        async with on_collection(store, collection, embedder.dim):
+            ready = True
+            wf = QueryWorkflow(
+                store, embedder,
+                synthesis_prompt=synthesis_prompt,
+                job_tag=job_tag,
+                timeout=120,
+                verbose=False,
+            )
+            return await wf.run(query=query, top_k=top_k)
     except Exception as exc:
+        if ready:
+            raise
         logger.warning("RAG store initialization failed: %s", exc)
         return {"answer": "Knowledge base is not available.", "sources": []}
-
-    wf = QueryWorkflow(
-        store, embedder,
-        synthesis_prompt=synthesis_prompt,
-        job_tag=job_tag,
-        timeout=120,
-        verbose=False,
-    )
-    result = await wf.run(query=query, top_k=top_k)
-    return result

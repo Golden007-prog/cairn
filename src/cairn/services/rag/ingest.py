@@ -28,7 +28,7 @@ from cairn.core.backend_connections import apply_backend_connection
 from cairn.core.workspace import workspace_collection
 from cairn.services.rag.embeddings import EmbeddingProvider, get_embedder
 from cairn.services.rag.readers import read_source
-from cairn.services.rag.stores import get_vector_store
+from cairn.services.rag.stores import get_vector_store, on_collection
 from cairn.services.rag.stores.base import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -203,10 +203,11 @@ async def ingest_document(file_path: str, collection: str | None = None) -> str:
     embedder = get_embedder()
     # Namespace by workspace (#237); idempotent so an already-scoped collection
     # passed from the indexer is not double-prefixed. Default workspace unchanged.
-    await store.initialize(workspace_collection(collection or s.rag_collection_name), embedder.dim)
-
-    wf = IngestWorkflow(store, embedder, timeout=300, verbose=False)
-    result = await wf.run(file_path=file_path)
+    # The store is process-wide: the whole ingest runs on this collection under
+    # the store's lock (re-entered when the indexer already holds it).
+    async with on_collection(store, workspace_collection(collection or s.rag_collection_name), embedder.dim):
+        wf = IngestWorkflow(store, embedder, timeout=300, verbose=False)
+        result = await wf.run(file_path=file_path)
     return str(result)
 
 

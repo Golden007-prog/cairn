@@ -23,12 +23,63 @@ automatically picks it up.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from functools import lru_cache
+from typing import AsyncIterator
 
 from cairn.services.rag.stores.base import VectorStore
 
 logger = logging.getLogger(__name__)
+
+#: Guards the process-wide store of :func:`get_vector_store`. A store holds the
+#: collection its next operation acts on as instance state (``initialize`` selects
+#: it), so on a store shared by every workspace, "select the collection" and "run
+#: the operation" must happen with no other caller in between: see
+#: :func:`on_collection`.
+SHARED_STORE_LOCK = threading.Lock()
+
+#: How long a waiting caller sleeps between attempts to take a store lock.
+_LOCK_POLL_S = 0.002
+
+#: The store locks the current task (and the tasks it starts while holding them,
+#: such as a workflow's steps) already holds, by ``id``: a nested entry point
+#: (``index_corpus`` → ``ingest_document``) re-enters instead of deadlocking.
+_HELD: ContextVar[frozenset[int]] = ContextVar("cairn_vector_store_locks_held", default=frozenset())
+
+
+@asynccontextmanager
+async def on_collection(
+    store: VectorStore, collection: str, dim: int, lock: threading.Lock = SHARED_STORE_LOCK,
+) -> AsyncIterator[VectorStore]:
+    """Select ``collection`` on a shared ``store`` and hold ``lock`` until the
+    block ends, so everything in the block acts on that collection and no other
+    caller selects another one in between.
+
+    Each entry point that uses a shared store (one lock per shared store
+    instance) wraps its WHOLE logical operation in this block: an index run, an
+    ingest, a query, a memory save/recall/list. Re-entrant per task: a nested
+    entry point inside a held block selects its collection without taking the
+    lock again. The lock is a :class:`threading.Lock` taken without blocking the
+    event loop (a non-blocking try, then a short sleep), so it holds across event
+    loops and threads, and a caller cancelled while waiting never owns it."""
+    held = _HELD.get()
+    if id(lock) in held:
+        await store.initialize(collection, dim)
+        yield store
+        return
+    while not lock.acquire(blocking=False):
+        await asyncio.sleep(_LOCK_POLL_S)
+    token = _HELD.set(held | {id(lock)})
+    try:
+        await store.initialize(collection, dim)
+        yield store
+    finally:
+        _HELD.reset(token)
+        lock.release()
 
 
 @lru_cache(maxsize=1)
