@@ -98,7 +98,7 @@ Fields any step can carry:
 | Field | Meaning |
 |---|---|
 | `id` | The step's id. Gates and loops are named by their `gate:` / `loop:` value instead. |
-| `with` | Inputs passed to the leg. `$input.<name>` reads a pipeline input; `$steps.<id>.<field>` reads an earlier leg's output. |
+| `with` | Inputs passed to the leg. `$input.<name>` reads a pipeline input; `$steps.<id>.<field>` reads an earlier leg's output. A value keeps its YAML type, and wires inside maps and lists are checked like top-level ones (the input must be declared, the step must exist and run earlier). Inside a map or list, write the explicit `$steps.<id>.<field>`: a bare `<id>.<field>` there is refused as ambiguous (it could be a literal such as `train.jsonl`). At the top level the bare form still works. |
 | `depends_on` | Steps that must finish first. |
 | `when` | An expression. False skips this leg (recorded as routed off) and the pipeline continues. |
 | `label` | A human-readable name for the run page and the graph. Display only. |

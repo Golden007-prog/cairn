@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from cairn.core._time import utc_now_iso
 from cairn.core.engine.schema import ApprovalRecord, TriggerEvent
+from cairn.core.triggers import console_support as support
 from cairn.core.triggers.auth import _oauth2_scheme, is_env_admin, require_admin
 from cairn.core.triggers.routers.reviews import decision_actor
 
@@ -44,7 +45,7 @@ def build_ingress_router(dispatcher, environment, runner) -> APIRouter:
 
     r = APIRouter()
 
-    @r.post("/triggers/alert")
+    @r.post("/triggers/alert", dependencies=[Depends(support.writable_workspace)])
     async def alert_endpoint(body: AlertWebhook, request: Request) -> dict[str, Any]:
         event = TriggerEvent(
             source=body.source,
@@ -59,7 +60,7 @@ def build_ingress_router(dispatcher, environment, runner) -> APIRouter:
         )
         return await _dispatch(dispatcher, event, environment, request_id=_req_id(request))
 
-    @r.post("/triggers/pattern")
+    @r.post("/triggers/pattern", dependencies=[Depends(support.writable_workspace)])
     async def pattern_endpoint(body: PatternWebhook, request: Request) -> dict[str, Any]:
         event = TriggerEvent(
             source="pattern",
@@ -74,7 +75,7 @@ def build_ingress_router(dispatcher, environment, runner) -> APIRouter:
         )
         return await _dispatch(dispatcher, event, environment, request_id=_req_id(request))
 
-    @r.post("/triggers/manual")
+    @r.post("/triggers/manual", dependencies=[Depends(support.writable_workspace)])
     async def manual_endpoint(body: ManualWebhook, request: Request) -> dict[str, Any]:
         event = TriggerEvent(
             source="manual",
@@ -127,7 +128,7 @@ def build_ingress_router(dispatcher, environment, runner) -> APIRouter:
                        "body": {"decision": "approve | reject"}},
         }
 
-    @r.post("/triggers/approve/{workflow_id}")
+    @r.post("/triggers/approve/{workflow_id}", dependencies=[Depends(support.writable_workspace)])
     async def approve_endpoint(
         workflow_id: str,
         body: SagaApprovalRequest,
@@ -216,7 +217,7 @@ def build_inbox_router(trigger_router) -> APIRouter:
     async def replay_inbox(
         since: str,
         admin: Annotated[Optional[str], Depends(require_admin)],
-        token: Annotated[Optional[str], Depends(_oauth2_scheme)],
+        workspace: Annotated[str, Depends(support.writable_workspace)],
     ) -> dict[str, Any]:
         inbox = getattr(trigger_router, "inbox", None) if trigger_router is not None else None
         if inbox is None:
@@ -225,13 +226,13 @@ def build_inbox_router(trigger_router) -> APIRouter:
                 detail="durable trigger inbox is not enabled (set CAIRN_TRIGGER_DURABLE=1)",
             )
         from cairn.core.storage.trigger_inbox import replay_since
-        from cairn.core.triggers.console_support import assert_can_write_workspace  # noqa: PLC0415 — routers ↔ server cycle
 
         # #218 — an owner/admin (``require_admin``) replays their own workspace; a
         # replayed delivery runs in its workspace, so only the instance admin (the
-        # env admin, or anyone with auth off) replays across workspaces.
+        # env admin, or anyone with auth off) replays across workspaces. Either
+        # way the caller may write in the workspace they act in (#221).
         everywhere = admin is None or is_env_admin(admin)
-        ws = None if everywhere else await assert_can_write_workspace(token)
+        ws = None if everywhere else workspace
         n = await replay_since(inbox, since=since, workspace=ws)
         return {"replayed": n, "since": since}
 

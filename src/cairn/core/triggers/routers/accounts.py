@@ -38,12 +38,10 @@ from cairn.core.workspace_variables import (
     valid_key,
 )
 
-#: The workspace-write guard (#1610). It moved to
-#: :mod:`cairn.core.triggers.console_support` when ``POST /start`` (#1975) became
-#: its second caller — one guard, or the two doors drift. Kept bound here at
-#: module level (not nested in the factory) so the #1574 scoping gate, which
-#: reads each route's body up to the next decorator, attributes it to no route.
-_assert_can_write_workspace = support.assert_can_write_workspace
+#: The workspace-write guard (#1610), as the route dependency every write
+#: route shares (``console_support.writable_workspace``, #221) — one guard, or
+#: the doors drift.
+_writable_workspace = support.writable_workspace
 
 
 async def _workspace_created(workspace_id: str, *, actor: str, source: str) -> None:
@@ -288,6 +286,7 @@ def build_accounts_router() -> APIRouter:
     async def put_workspace_variable(
         key: str,
         body: WorkspaceVariableWrite,
+        ws: Annotated[str, Depends(_writable_workspace)],
         token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
     ) -> dict[str, Any]:
         """Create or replace one variable. Idempotent; stamps who wrote it."""
@@ -296,7 +295,6 @@ def build_accounts_router() -> APIRouter:
                 status_code=422,
                 detail="a variable key is 1–128 chars of letters, digits, '_', '-' or '.'",
             )
-        ws = await _assert_can_write_workspace(token)
         ident = await caller_identity(token)
         saved = await default_workspace_variable_store().put(WorkspaceVariable(
             workspace_id=ws, key=key, value=body.value,
@@ -308,11 +306,10 @@ def build_accounts_router() -> APIRouter:
     @r.delete("/variables/{key}", dependencies=[Depends(require_auth)])
     async def delete_workspace_variable(
         key: str,
-        token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
+        ws: Annotated[str, Depends(_writable_workspace)],
     ) -> dict[str, Any]:
         """Remove one variable. 404 when it isn't set — deleting a key that was
         never there is a mistake worth reporting, not a silent success."""
-        ws = await _assert_can_write_workspace(token)
         if not await default_workspace_variable_store().delete(ws, key):
             raise HTTPException(status_code=404, detail=f"no variable {key!r} in workspace {ws!r}")
         return {"workspace_id": ws, "key": key, "deleted": True}
