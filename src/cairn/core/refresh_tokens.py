@@ -24,6 +24,10 @@ What a row is:
   stored it) and a sibling takes its place: a parent never has more than one
   live child, and a child that was itself already rotated makes the replay
   reuse after all.
+* A superseded child (revoked, never used) presented
+  :data:`REUSE_GRACE_SECONDS` or more after it was superseded ends its family
+  with a WARNING (ADR-0145): its holder is the client a replay displaced, so the
+  replay may have been a copy of the token.
 * The family's lifetime is fixed when it starts: ``CAIRN_REFRESH_TOKEN_DAYS``
   (default 30) when the sign-in asked to be remembered, :data:`SESSION_HOURS`
   otherwise. A rotated row inherits its family's ``expires_at``.

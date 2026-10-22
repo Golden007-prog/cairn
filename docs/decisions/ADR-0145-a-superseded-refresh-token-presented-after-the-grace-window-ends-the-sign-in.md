@@ -43,3 +43,12 @@ The store already records `revoked_at` as a timestamp; no schema change.
   the log cannot tell this benign case from a takeover.
 - A replay is still not detected while the displaced client stays silent; detection waits for
   its next refresh.
+- A request carrying the superseded child that reaches the server ten seconds or more after the
+  replay superseded it ends the family, even when it is only a slow in-flight request from the
+  same browser that is about to store the sibling. That needs the request (or the 200 that
+  answered the replay) delayed by more than ten seconds, which is pathological, and the person
+  then signs in again.
+- `revoked_at` is written by the replica that superseded the child and compared on the replica
+  that receives it, under the same NTP assumption as ADR-0144. A `revoked_at` that appears to lie
+  in the future (a lagging replica) gives a negative elapsed time, so the token is only refused;
+  a replica whose clock runs ahead can end a family up to its lead earlier than ten seconds.

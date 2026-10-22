@@ -744,6 +744,54 @@ def test_a_superseded_token_within_the_window_is_refused_without_ending_the_sign
     asyncio.run(go())
 
 
+def _freeze(monkeypatch, at: datetime) -> None:
+    """Stop the refresh-token module's clock at ``at``."""
+    monkeypatch.setattr(RT, "_now", lambda: at)
+
+
+def test_the_thiefs_later_tokens_die_with_the_family(store, monkeypatch, caplog):
+    """The copy already rotated its sibling C into D before the displaced client
+    came back: presenting B after the window ends the family, D included."""
+    async def go():
+        raw, row = await RT.issue(f"user-{uuid.uuid4().hex}", "acme", remember=True, store=store)
+        raw_b, b = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        raw_c, c = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        raw_d, d = await RT.rotate(await RT.validate(raw_c, store=store), store=store)
+        _advance(monkeypatch, RT.REUSE_GRACE_SECONDS + 1)
+        with caplog.at_level(logging.WARNING, logger="cairn.core.refresh_tokens"):
+            with pytest.raises(RT.RefreshError, match="revoked"):
+                await RT.validate(raw_b, store=store)
+        assert (await store.get(d.token_hash)).revoked_at, "the thief's latest token is revoked"
+        with pytest.raises(RT.RefreshError, match="revoked"):
+            await RT.validate(raw_d, store=store)
+        assert len(_warnings(caplog)) == 1
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("after,ends", [(RT.REUSE_GRACE_SECONDS, True),
+                                        (RT.REUSE_GRACE_SECONDS - 0.001, False),
+                                        (-5, False)])
+def test_the_superseded_boundary_with_a_frozen_clock(store, monkeypatch, caplog, after, ends):
+    """Pinned with a frozen clock: exactly REUSE_GRACE_SECONDS after it was
+    superseded ends the family; a millisecond less only refuses; a ``revoked_at``
+    that lies in the future (a lagging replica) only refuses."""
+    t0 = datetime(2026, 10, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+    async def go():
+        _freeze(monkeypatch, t0)
+        raw, row = await RT.issue(f"user-{uuid.uuid4().hex}", "acme", remember=True, store=store)
+        raw_b, b = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        raw_c, c = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        assert (await store.get(b.token_hash)).revoked_at == t0.isoformat()
+        _freeze(monkeypatch, t0 + timedelta(seconds=after))
+        with caplog.at_level(logging.WARNING, logger="cairn.core.refresh_tokens"):
+            with pytest.raises(RT.RefreshError, match="revoked"):
+                await RT.validate(raw_b, store=store)
+        assert bool((await store.get(c.token_hash)).revoked_at) is ends
+        assert len(_warnings(caplog)) == (1 if ends else 0)
+    asyncio.run(go())
+
+
 def test_tokens_revoked_by_sign_out_or_a_password_change_end_nothing_more(store, monkeypatch, caplog):
     """A token revoked with its whole family (sign-out, password change, disabling,
     earlier reuse) presented later is refused: nothing more is revoked and
