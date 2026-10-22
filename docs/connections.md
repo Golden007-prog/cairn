@@ -46,10 +46,13 @@ unchanged, and references stored before accounts were namespaced keep resolving
 for it.
 
 A run resolves connections and secrets in its own account: the account that owns
-the run's workspace (`workspace_account(workspace_id)`). The dispatch layer runs a
-template run, a resumed run, every pipeline leg and a remote job's poll in the
-workspace its record names (`workspace_scope`), so the account follows the record
-rather than whichever request or worker happens to execute it.
+the run's workspace (`workspace_account(workspace_id)`). These run in the workspace
+their record names (`workspace_scope`), so the account follows the record rather
+than whichever request or worker happens to execute them: a template run, an
+in-process resume, a pipeline's template, task and flow legs (in-process and under
+the Temporal owner), and a remote job's poll and relaunch. With auth on, a record
+that names no workspace, or a workspace no store holds, is refused rather than
+resolved as the deployment's.
 `resolve_connection(name, account_id=…)` looks a name up in one account only:
 when `account_id` is omitted it is the current run's (`run_account()`). A tenant
 account's run finds only its own rows; the deployment (`default`) finds only the

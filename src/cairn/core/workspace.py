@@ -79,7 +79,16 @@ def workspace_scope(workspace_id: Optional[str]):
     outside the request that started it (a pipeline leg advanced off a bus event,
     a resumed run, a Temporal activity), so everything resolved inside — the
     run's connections and secrets among it — is resolved for the workspace the
-    record names, not whichever context the executing task happened to inherit."""
+    record names, not whichever context the executing task happened to inherit.
+
+    A record that names no workspace means the implicit ``default`` with auth off
+    (today's behaviour). With auth on it raises :class:`WorkspaceScopeRequired`:
+    the record cannot say whose work it is, so nothing runs under a guess."""
+    if not (workspace_id or "").strip():
+        from cairn.core.auth_tokens import auth_enabled  # noqa: PLC0415 — keep the import graph of this module flat
+
+        if auth_enabled():
+            raise WorkspaceScopeRequired("the record names no workspace")
     token = set_current_workspace(workspace_id)
     try:
         yield
@@ -368,14 +377,21 @@ async def workspace_account(workspace_id: Optional[str] = None, *, store: Any = 
     """The account that owns ``workspace_id`` (default: :func:`current_workspace`).
 
     This is the account a run in that workspace resolves connections and secrets
-    in. A workspace no store holds (keyless dev naming an id, the implicit
-    ``default`` before anything created it) belongs to the deployment's
-    ``default`` account. A store error propagates: a caller resolving credentials
-    must not fall back to the deployment's on an unknown answer."""
+    in. With auth off, a workspace no store holds (keyless dev naming an id)
+    belongs to the deployment's ``default`` account. With auth on, no account owns
+    such a workspace, so it raises :class:`WorkspaceForbidden` — the same answer
+    :func:`assert_workspace_allowed` gives. A store error propagates: a caller
+    resolving credentials must not fall back to the deployment's on an unknown
+    answer."""
+    from cairn.core.auth_tokens import auth_enabled  # noqa: PLC0415 — keep the import graph of this module flat
+
     ws_id = (workspace_id or current_workspace()).strip() or DEFAULT_WORKSPACE
     ws = await (store or get_workspace_store()).get(ws_id)
-    acct = (getattr(ws, "account_id", "") or "").strip() if ws is not None else ""
-    return acct or DEFAULT_ACCOUNT
+    if ws is None:
+        if auth_enabled():
+            raise WorkspaceForbidden(ws_id)
+        return DEFAULT_ACCOUNT
+    return (getattr(ws, "account_id", "") or "").strip() or DEFAULT_ACCOUNT
 
 
 # ── authorization (#1610, ADR-0094 D3/D4) ─────────────────────────────────
@@ -392,6 +408,12 @@ async def workspace_account(workspace_id: Optional[str] = None, *, store: Any = 
 # Keeping the decision here makes that a change to this function instead of to
 # every call site, which is the same reachability lesson as #1376/#1402: a
 # chokepoint must be a FUNCTION others call, not a BLOCK others copy.
+
+
+class WorkspaceScopeRequired(RuntimeError):
+    """Work that resolves an account's connections or secrets has no workspace to
+    resolve them in, and auth is on. Raised instead of resolving as the
+    deployment."""
 
 
 class WorkspaceForbidden(Exception):

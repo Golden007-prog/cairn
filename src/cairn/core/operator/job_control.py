@@ -235,9 +235,11 @@ async def _record_compute(rec: RemoteJobRecord) -> Any:
     the ambient context — names the account; a tenant's job never resolves the
     deployment's connection or another account's by the same name."""
     from cairn.core.connections import resolve_connection  # noqa: PLC0415 — lazy: off the import path
-    from cairn.core.workspace import DEFAULT_WORKSPACE, workspace_account  # noqa: PLC0415 — lazy, as above
+    from cairn.core.workspace import workspace_account  # noqa: PLC0415 — lazy, as above
 
-    account = await workspace_account(rec.workspace_id or DEFAULT_WORKSPACE)
+    # called inside workspace_scope(rec.workspace_id): a record naming no workspace has
+    # already been refused with auth on, and means the implicit default with auth off
+    account = await workspace_account(rec.workspace_id or None)
     return await resolve_connection(rec.compute_target, account_id=account)
 
 
