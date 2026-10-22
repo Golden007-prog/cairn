@@ -154,8 +154,9 @@ def build_jobs_router(store_factory=None) -> APIRouter:
                         subject: Annotated[Optional[str], Depends(require_auth)]) -> Any:
         """Hand this worker at most ONE queued job, with a lease. 204 when there
         is nothing it can run — an empty queue is not an error, and a worker
-        polls this route forever. Only a worker credential claims (403
-        otherwise, cairn-platform#224)."""
+        polls this route forever."""
+        # cairn-platform#224: only a worker credential claims (403 otherwise). A
+        # comment, not the docstring: the docstring is the OpenAPI text.
         if _scoped_run(request, subject) is not None:
             raise HTTPException(
                 status_code=403,
@@ -178,7 +179,8 @@ def build_jobs_router(store_factory=None) -> APIRouter:
         with ``accepted: false``) when this worker no longer holds the job — the
         honest answer to a worker whose lease expired while it was working, and
         the signal for it to stop. A per-run token may only heartbeat its own
-        run's job; any other caller needs a worker credential (403 otherwise)."""
+        run's job (403 otherwise)."""
+        # cairn-platform#224: any other caller needs a worker credential (403).
         if body.status not in _STATES:
             raise HTTPException(status_code=422, detail=f"status must be one of {', '.join(_STATES)}")
         store = _store()
