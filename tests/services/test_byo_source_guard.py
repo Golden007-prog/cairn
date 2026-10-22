@@ -21,9 +21,11 @@ from cairn.core import connection_probe
 from cairn.core.storage.knowledge_corpora import WorkspaceCorpus
 from cairn.services.rag.byo import index_workspace_corpus, resolve_corpus_source
 
+# the log path is baked into the stub: a tenant clone's environment is
+# allowlisted, so a variable naming it would not reach git
 _STUB = """#!/bin/sh
-printf '%s\\n' "$@" > "$GIT_STUB_LOG"
-printf '%s' "$GIT_ALLOW_PROTOCOL" > "$GIT_STUB_LOG.protocols"
+printf '%s\\n' "$@" > '{log}'
+printf '%s' "$GIT_ALLOW_PROTOCOL" > '{log}.protocols'
 for last; do :; done
 mkdir -p "$last"
 """
@@ -34,11 +36,10 @@ def git_stub(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     git = bin_dir / "git"
-    git.write_text(_STUB)
-    git.chmod(git.stat().st_mode | stat.S_IEXEC)
     log = tmp_path / "git.log"
+    git.write_text(_STUB.format(log=log))
+    git.chmod(git.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
-    monkeypatch.setenv("GIT_STUB_LOG", str(log))
     monkeypatch.delenv("CAIRN_PROBE_ALLOW_PRIVATE", raising=False)
     # every name resolves to a public address unless a test says otherwise
     monkeypatch.setattr(connection_probe, "_resolved_ips",
@@ -138,8 +139,9 @@ def test_a_tenant_clone_runs_without_the_servers_git_setup(git_stub, tmp_path, m
     monkeypatch.setattr(byo.subprocess, "run", _run)
     resolve_corpus_source("https://github.com/acme/docs.git", dest=str(tmp_path / "d"))
     (cmd, env), = calls
-    assert cmd[:5] == ["git", "-c", "http.followRedirects=false", "-c", "credential.helper="]
-    assert cmd.index("credential.helper=") < cmd.index("clone")
+    assert cmd[:7] == ["git", "-c", "http.followRedirects=false", "-c", "credential.helper=",
+                       "-c", "core.askPass="]
+    assert cmd.index("core.askPass=") < cmd.index("clone")
     assert env["GIT_ALLOW_PROTOCOL"] == "https"
     assert env["GIT_CONFIG_NOSYSTEM"] == "1"
     assert env["GIT_CONFIG_GLOBAL"] == os.devnull
@@ -157,3 +159,46 @@ def test_a_deployment_clone_keeps_the_servers_git_setup(git_stub, tmp_path, monk
     resolve_corpus_source("git@github.com:acme/docs.git", dest=str(tmp_path / "d"), allow_local=True)
     (cmd, env), = calls
     assert env is None and cmd[:2] == ["git", "clone"]
+
+
+def test_a_tenant_clone_env_is_an_allowlist(git_stub, tmp_path, monkeypatch):
+    """Config injected through the environment, askpass programs and unrelated
+    server variables never reach a tenant's git; the proxy / CA / PATH ones do.
+    HOME and XDG_CONFIG_HOME point at an empty dir (git < 2.32 ignores
+    GIT_CONFIG_GLOBAL), removed after the clone."""
+    import subprocess
+
+    from cairn.services.rag import byo
+
+    injected = {
+        "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.extraHeader", "GIT_CONFIG_VALUE_0": "X: y",
+        "GIT_CONFIG_PARAMETERS": "'url.x.insteadof'='https://'", "GIT_ASKPASS": "/bin/echo",
+        "SSH_ASKPASS": "/bin/echo", "SERVER_ONLY_SECRET": "server-value", "XDG_CONFIG_HOME": "/etc/xdg",
+    }
+    kept = {"HTTPS_PROXY": "http://proxy.example:3128", "no_proxy": "localhost",
+            "SSL_CERT_FILE": "/etc/ssl/ca.pem", "LC_ALL": "C.UTF-8"}
+    for k, v in {**injected, **kept}.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("HOME", str(tmp_path / "server-home"))
+
+    seen: dict = {}
+
+    def _run(cmd, **kw):
+        env = kw["env"]
+        seen["env"] = dict(env)
+        seen["home_listing"] = sorted(os.listdir(env["HOME"]))
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(byo.subprocess, "run", _run)
+    resolve_corpus_source("https://github.com/acme/docs.git", dest=str(tmp_path / "d"))
+    env = seen["env"]
+    for k in ("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_PARAMETERS",
+              "GIT_ASKPASS", "SSH_ASKPASS", "SERVER_ONLY_SECRET"):
+        assert k not in env, k
+    for k, v in kept.items():
+        assert env[k] == v
+    assert env["PATH"] == os.environ["PATH"]
+    assert env["HOME"] != str(tmp_path / "server-home")
+    assert env["XDG_CONFIG_HOME"] == env["HOME"]
+    assert seen["home_listing"] == []  # empty while git runs
+    assert not os.path.exists(env["HOME"])  # and cleaned up after

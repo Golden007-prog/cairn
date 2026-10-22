@@ -7,18 +7,19 @@ isolate beyond the workspace-scoped vector collection).
 
   - ``git+https://…`` / ``…​.git`` → shallow clone → index.
   - ``file://…`` → local dir (dev).
+  - ``s3://`` / ``artifact://`` → resolved via the account's connection / artifact
+    storage (ADR-0062; not wired here — the git slice ships first).
 
 The source is caller-typed, so by default only a public ``https://`` git remote is
 cloned: it must pass the connection probe's address guard
 (:func:`cairn.core.connection_probe.probe_target_block_reason`), git is limited to
-the https protocol and does not follow redirects, it runs without this server's
-system/global git config (credential helpers, extra headers, url rewrites) or a
-terminal prompt, and ``--`` ends git's options before the URL. ``file://``, local
-paths and ssh / ``file:`` git remotes need ``allow_local=True``, which only a
-deployment caller passes. An option-shaped (``-…``) or ``<transport>::`` source is
-never cloned.
-  - ``s3://`` / ``artifact://`` → resolved via the account's connection / artifact
-    storage (ADR-0062; not wired here — the git slice ships first).
+the https protocol and does not follow redirects, it runs with an allowlisted
+environment and without this server's system/global git config (credential
+helpers, extra headers, url rewrites), credential helper, askpass or a terminal
+prompt (see :func:`_clone`), and ``--`` ends git's options before the URL.
+``file://``, local paths and ssh / ``file:`` git remotes need
+``allow_local=True``, which only a deployment caller passes. An option-shaped
+(``-…``) or ``<transport>::`` source is never cloned.
 
 Known limits of the address check: it resolves the host once, before git runs,
 so it does not defend against a name whose DNS answer changes between the check
@@ -72,28 +73,64 @@ def _clone_url(url: str, *, allow_local: bool) -> str:
     return clone_url
 
 
+#: What a tenant clone inherits from this server's environment: enough to find
+#: git, use the deployment's proxy and CA bundle, and pick a locale and temp dir.
+#: Everything else is dropped, including ``GIT_CONFIG_COUNT`` / ``GIT_CONFIG_KEY_n``
+#: / ``GIT_CONFIG_VALUE_n``, ``GIT_CONFIG_PARAMETERS``, ``GIT_ASKPASS`` and
+#: ``SSH_ASKPASS``. ``HOME`` is not inherited: it points at an empty temp dir.
+_TENANT_CLONE_ENV = frozenset({
+    "PATH", "LANG", "TMPDIR",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "GIT_SSL_CAINFO", "REQUESTS_CA_BUNDLE",
+})
+
+
+def _tenant_clone_env(home: str) -> dict[str, str]:
+    """The environment a tenant's clone runs in (see :data:`_TENANT_CLONE_ENV`).
+    ``home`` is an empty directory used as ``HOME`` and ``XDG_CONFIG_HOME``, so a
+    git older than 2.32 (which ignores ``GIT_CONFIG_GLOBAL``) finds no global
+    config either."""
+    env = {k: v for k, v in os.environ.items() if k in _TENANT_CLONE_ENV or k.startswith("LC_")}
+    env.update({
+        "GIT_ALLOW_PROTOCOL": "https",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+        "HOME": home,
+        "XDG_CONFIG_HOME": home,
+    })
+    return env
+
+
 def _clone(clone_url: str, ref: Optional[str], dest: str, *, allow_local: bool) -> None:
-    """Shallow-clone an already-checked ``clone_url`` (see :func:`_clone_url`)."""
-    env = None
+    """Shallow-clone an already-checked ``clone_url`` (see :func:`_clone_url`).
+
+    A tenant clone (no ``allow_local``) is limited to https, does not follow a
+    redirect past the address check, and runs with none of this server's own git
+    setup: an allowlisted environment (:data:`_TENANT_CLONE_ENV`), no system or
+    global config (so credential helpers, extra headers, url rewrites, and an
+    ``http.proxy`` / ``http.sslCAInfo`` set only there, do not apply; the proxy and
+    CA environment variables still do), no credential helper, no askpass and no
+    terminal prompt."""
     cmd = ["git"]
-    if not allow_local:
-        # https only; a redirect cannot walk past the address check; and none of
-        # this server's own git setup (system/global config: credential helpers,
-        # extra headers, url rewrites) or an interactive prompt rides along on a
-        # tenant's clone.
-        env = {
-            **os.environ,
-            "GIT_ALLOW_PROTOCOL": "https",
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_TERMINAL_PROMPT": "0",
-        }
-        cmd += ["-c", "http.followRedirects=false", "-c", "credential.helper="]
-    cmd += ["clone", "--depth", "1"]
+    if allow_local:
+        subprocess.run(cmd + _clone_args(clone_url, ref, dest), check=True, capture_output=True,
+                       timeout=_GIT_TIMEOUT_S)
+        return
+    cmd += ["-c", "http.followRedirects=false", "-c", "credential.helper=", "-c", "core.askPass="]
+    home = tempfile.mkdtemp(prefix="cairn-byo-home-")
+    try:
+        subprocess.run(cmd + _clone_args(clone_url, ref, dest), check=True, capture_output=True,
+                       timeout=_GIT_TIMEOUT_S, env=_tenant_clone_env(home))
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def _clone_args(clone_url: str, ref: Optional[str], dest: str) -> list[str]:
+    args = ["clone", "--depth", "1"]
     if ref:
-        cmd += [f"--branch={ref}"]
-    cmd += ["--", clone_url, dest]
-    subprocess.run(cmd, check=True, capture_output=True, timeout=_GIT_TIMEOUT_S, env=env)
+        args += [f"--branch={ref}"]
+    return args + ["--", clone_url, dest]
 
 
 def resolve_corpus_source(
