@@ -100,9 +100,9 @@ class ArtifactStore(Protocol):
     ) -> int: ...
     #: Reads by NAME answer within ONE workspace: ``workspace_id``, else the
     #: current one (:func:`~cairn.core.workspace.current_workspace`). Another
-    #: workspace's name, version or head reads as "not found". A name belongs to
-    #: the workspace of its first version; registering under a name another
-    #: workspace holds raises :class:`DatasetNameUnavailable`.
+    #: workspace's name, version or head reads as "not found". Any workspace may
+    #: register under any name: version numbers are one sequence per name (the
+    #: key is ``(name, version)``), and each workspace sees only its own versions.
     async def get_dataset_version(
         self, name: str, version: Optional[int] = None, *, workspace_id: Optional[str] = None,
     ) -> Optional[tuple[int, ArtifactRecord]]: ...
@@ -130,7 +130,7 @@ class ArtifactStore(Protocol):
     async def set_dataset_version_meta(
         self, name: str, version: int, *, role: Optional[str] = None,
         schema: Optional[str] = None, column_mapping: Optional[dict] = None,
-        dated_at: Optional[str] = None) -> dict: ...
+        dated_at: Optional[str] = None, workspace_id: Optional[str] = None) -> dict: ...
     #: #2021 (ADR-0102 D1) — stamp the INTAKE VERDICT and its structured report
     #: on a version. Written control-side by the leg that registered it (the
     #: box has no database, ADR-0081 D3); read by the launch door
@@ -138,7 +138,8 @@ class ArtifactStore(Protocol):
     #: bytes, so it lands on the existing row — never a second table.
     async def set_dataset_version_verdict(
         self, name: str, version: int, *, verdict: str,
-        reasons: Optional[list[str]] = None, report: Optional[dict] = None) -> dict: ...
+        reasons: Optional[list[str]] = None, report: Optional[dict] = None,
+        workspace_id: Optional[str] = None) -> dict: ...
     #: #1969 — human-facing metadata on a dataset NAME (description + labels),
     #: editable at any time, independent of the append-only version rows.
     #: #2020 adds the DECLARED defaults: what this dataset IS (role), the shape
@@ -214,12 +215,12 @@ class _NullArtifactStore:
         return []
 
     async def set_dataset_version_meta(self, name, version, *, role=None, schema=None,
-                                       column_mapping=None, dated_at=None) -> dict:
+                                       column_mapping=None, dated_at=None, workspace_id=None) -> dict:
         raise RuntimeError("dataset registry not configured (CAIRN_STORAGE unset) — "
                            f"cannot set the role of {name!r}@{version}")
 
     async def set_dataset_version_verdict(self, name, version, *, verdict, reasons=None,
-                                          report=None) -> dict:
+                                          report=None, workspace_id=None) -> dict:
         raise RuntimeError("no artifact storage configured — "
                            f"cannot stamp the intake verdict of {name!r}@{version}")
 
@@ -437,27 +438,10 @@ def _version_row(row: Sequence) -> dict[str, Any]:
     }
 
 
-class DatasetNameUnavailable(ValueError):
-    """Registration under a dataset name that another workspace holds.
-
-    A version's key is ``(name, version)``, one sequence per name for the whole
-    deployment, so a name belongs to the workspace that registered its first
-    version. Another workspace registering under it is refused rather than
-    appended to that history. The message does not say which workspace holds it."""
-
-
 def _dataset_workspace(workspace_id: Optional[str]) -> str:
     """The workspace a by-name dataset read or write answers in: the one named,
     else the current one (the request's or the run's)."""
     return (workspace_id or "").strip() or current_workspace() or DEFAULT_WORKSPACE
-
-
-def _assert_name_available(name: str, owner: Optional[str], workspace_id: str) -> None:
-    """Refuse a registration under ``name`` when its first version (``owner``,
-    ``None`` = no version yet) belongs to another workspace."""
-    if owner is not None and ((owner or "").strip() or DEFAULT_WORKSPACE) != workspace_id:
-        raise DatasetNameUnavailable(
-            f"dataset name {name!r} is not available in this workspace; register under another name")
 
 
 async def _declare(store, name: str, role, schema, column_mapping) -> tuple:
@@ -625,7 +609,6 @@ class SqliteArtifactStore:
         if rec is None:
             raise KeyError(f"artifact {artifact_id!r} not registered — cannot version as {name!r}")
         ws = _dataset_workspace(workspace_id)
-        _assert_name_available(name, await self._name_owner(name), ws)
         role, schema, column_mapping = await _declare(self, name, role, schema, column_mapping)
         origin = normalize_origin(origin)
         # #2033 — the never-trainable rule, at the WRITE. Before the golden
@@ -637,8 +620,6 @@ class SqliteArtifactStore:
         detail_json = json.dumps(detail) if detail else None
         await _guard_golden(role, name, rec, ws)
         async with self._lock:
-            # Checked again under the lock: the first version may have landed since.
-            _assert_name_available(name, self._name_owner_locked(name), ws)
             # The no-op compares with THIS workspace's head; the next number is
             # the name's, since (name, version) is the key.
             head = self._conn.execute(
@@ -677,17 +658,6 @@ class SqliteArtifactStore:
                  dated, origin, detail_json))
             self._conn.commit()
         return version
-
-    async def _name_owner(self, name) -> Optional[str]:
-        async with self._lock:
-            return self._name_owner_locked(name)
-
-    def _name_owner_locked(self, name) -> Optional[str]:
-        """The workspace of ``name``'s first version (``None``: no version yet)."""
-        row = self._conn.execute(
-            "SELECT workspace_id FROM dataset_versions WHERE name=? ORDER BY version ASC LIMIT 1",
-            (name,)).fetchone()
-        return None if row is None else (row[0] or DEFAULT_WORKSPACE)
 
     async def get_dataset_version(self, name, version=None, *, workspace_id=None):
         ws = _dataset_workspace(workspace_id)
@@ -752,8 +722,9 @@ class SqliteArtifactStore:
         return out
 
     async def set_dataset_version_meta(self, name, version, *, role=None, schema=None,
-                                       column_mapping=None, dated_at=None) -> dict:
-        cur = await self.get_dataset_version_meta(name, int(version))
+                                       column_mapping=None, dated_at=None, workspace_id=None) -> dict:
+        cur = await self.get_dataset_version_meta(
+            name, int(version), workspace_id=_dataset_workspace(workspace_id))
         if cur is None:
             raise KeyError(f"dataset {name!r}@{version} not found")
         new_role = cur["role"] if role is None else normalize_role(role, default=None)
@@ -778,8 +749,9 @@ class SqliteArtifactStore:
                 "dated_at": new_dated}
 
     async def set_dataset_version_verdict(self, name, version, *, verdict, reasons=None,
-                                          report=None) -> dict:
-        cur = await self.get_dataset_version_meta(name, int(version))
+                                          report=None, workspace_id=None) -> dict:
+        cur = await self.get_dataset_version_meta(
+            name, int(version), workspace_id=_dataset_workspace(workspace_id))
         if cur is None:
             raise KeyError(f"dataset {name!r}@{version} not found")
         value = normalize_verdict(verdict)
@@ -1034,7 +1006,6 @@ class PostgresArtifactStore:
         if rec is None:
             raise KeyError(f"artifact {artifact_id!r} not registered — cannot version as {name!r}")
         ws = _dataset_workspace(workspace_id)
-        _assert_name_available(name, await self._name_owner(name), ws)
         role, schema, column_mapping = await _declare(self, name, role, schema, column_mapping)
         origin = normalize_origin(origin)
         assert_role_allowed_for_origin(role, origin)  # #2033 — see the sqlite twin
@@ -1047,16 +1018,11 @@ class PostgresArtifactStore:
         pool = await self._pool()
         async with pool.acquire() as conn:
             async with conn.transaction():
-                # Checked again in the transaction; see the sqlite twin for the
-                # own-head no-op and the name-wide next number.
+                # See the sqlite twin: the no-op compares with this workspace's
+                # head; the next number is the name's.
                 last = await conn.fetchrow(
-                    "SELECT version, workspace_id FROM dataset_versions WHERE name=$1 "
+                    "SELECT version FROM dataset_versions WHERE name=$1 "
                     "ORDER BY version DESC LIMIT 1 FOR UPDATE", name)
-                first = await conn.fetchval(
-                    "SELECT workspace_id FROM dataset_versions WHERE name=$1 "
-                    "ORDER BY version ASC LIMIT 1", name)
-                _assert_name_available(
-                    name, None if last is None else (first or DEFAULT_WORKSPACE), ws)
                 head = await conn.fetchrow(
                     "SELECT version, artifact_id FROM dataset_versions WHERE name=$1 "
                     "AND workspace_id=$2 ORDER BY version DESC LIMIT 1", name, ws)
@@ -1083,16 +1049,6 @@ class PostgresArtifactStore:
                     mapping_json, parent_version or "", policy_json, ws,
                     dated, origin, detail_json)
         return version
-
-    async def _name_owner(self, name) -> Optional[str]:
-        """The workspace of ``name``'s first version (``None``: no version yet)."""
-        await self.ensure_schema()
-        pool = await self._pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT workspace_id FROM dataset_versions WHERE name=$1 "
-                "ORDER BY version ASC LIMIT 1", name)
-        return None if row is None else (row["workspace_id"] or DEFAULT_WORKSPACE)
 
     async def get_dataset_version(self, name, version=None, *, workspace_id=None):
         ws = _dataset_workspace(workspace_id)
@@ -1164,8 +1120,9 @@ class PostgresArtifactStore:
         return out
 
     async def set_dataset_version_meta(self, name, version, *, role=None, schema=None,
-                                       column_mapping=None, dated_at=None) -> dict:
-        cur = await self.get_dataset_version_meta(name, int(version))
+                                       column_mapping=None, dated_at=None, workspace_id=None) -> dict:
+        cur = await self.get_dataset_version_meta(
+            name, int(version), workspace_id=_dataset_workspace(workspace_id))
         if cur is None:
             raise KeyError(f"dataset {name!r}@{version} not found")
         new_role = cur["role"] if role is None else normalize_role(role, default=None)
@@ -1187,8 +1144,9 @@ class PostgresArtifactStore:
                 "dated_at": new_dated}
 
     async def set_dataset_version_verdict(self, name, version, *, verdict, reasons=None,
-                                          report=None) -> dict:
-        cur = await self.get_dataset_version_meta(name, int(version))
+                                          report=None, workspace_id=None) -> dict:
+        cur = await self.get_dataset_version_meta(
+            name, int(version), workspace_id=_dataset_workspace(workspace_id))
         if cur is None:
             raise KeyError(f"dataset {name!r}@{version} not found")
         value = normalize_verdict(verdict)

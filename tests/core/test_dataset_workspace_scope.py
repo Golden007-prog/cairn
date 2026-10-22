@@ -3,8 +3,8 @@
 A ``dataset:<name>[@<version>|@latest]`` ref, and every by-name read of the
 registry, answers in one workspace: the one named, else the one in scope (a
 request's, or a run's scoped from its record). Another workspace's name, pinned
-version or head reads as "not found". A name belongs to the workspace of its
-first version; registering under a name another workspace holds is refused.
+version or head reads as "not found". Any workspace may register under any
+name (one version sequence per name); its versions stay invisible to the others.
 With auth on, run-time resolution and leg registration outside any workspace
 scope are refused (``WorkspaceScopeRequired``). Single-node and auth-off
 deployments, where everything is ``default``, are unchanged.
@@ -24,7 +24,6 @@ import pytest
 
 from cairn.core.dataflow.contract import ArtifactDescriptor
 from cairn.core.storage.artifacts import (
-    DatasetNameUnavailable,
     SqliteArtifactStore,
     resolve_dataset_ref,
     resolve_dataset_refs_in_config,
@@ -149,37 +148,68 @@ async def test_a_tenant_cannot_change_another_workspaces_version(store):
     assert (await store.set_dataset_version_verdict("facts", 2, verdict="admitted"))["verdict"] == "admitted"
 
 
+async def test_meta_and_verdict_writes_take_an_explicit_workspace(store):
+    """``workspace_id`` names the workspace the write answers in, whatever is in scope."""
+    with pytest.raises(KeyError):
+        await store.set_dataset_version_meta("facts", 1, role="test", workspace_id="ws-b")
+    with pytest.raises(KeyError):
+        await store.set_dataset_version_verdict("facts", 2, verdict="blocked", workspace_id="ws-b")
+    assert (await store.get_dataset_version_meta("facts", 1))["role"] == "training"
+    # from the default scope, the tenant's own version by explicit workspace
+    got = await store.set_dataset_version_verdict("mine", 1, verdict="degraded", workspace_id="ws-b")
+    assert got["verdict"] == "degraded"
+    got = await store.set_dataset_version_meta("mine", 1, role="test", workspace_id="ws-b")
+    assert got["role"] == "test"
+    row = await store.get_dataset_version_meta("mine", 1, workspace_id="ws-b")
+    assert (row["role"], row["verdict"]) == ("test", "degraded")
+    with workspace_scope("ws-b"):
+        with pytest.raises(KeyError):
+            await store.set_dataset_version_verdict("facts", 2, verdict="blocked", workspace_id="ws-b")
+        assert (await store.set_dataset_version_verdict(
+            "facts", 2, verdict="admitted", workspace_id="default"))["verdict"] == "admitted"
+
+
 # ── registration ─────────────────────────────────────────────────────────────
 
 
-async def test_registration_under_another_workspaces_name_is_refused(store):
+async def test_registration_under_a_name_another_workspace_uses(store):
+    """Any workspace may use any name. Its versions take the name's next numbers
+    and stay invisible to the other workspace, whose head does not move."""
     with workspace_scope("ws-b"):
-        with pytest.raises(DatasetNameUnavailable, match="not available in this workspace") as e:
-            await store.register_dataset_version("facts", "hash-x")
-    assert "default" not in str(e.value)                           # does not say who holds it
-    with pytest.raises(DatasetNameUnavailable):
-        await store.register_dataset_version("facts", "hash-x", workspace_id="ws-b")
-    # and the other way round: the deployment cannot take a tenant's name
-    with pytest.raises(DatasetNameUnavailable):
-        await store.register_dataset_version("mine", "hash-x")
+        assert await store.register_dataset_version("facts", "hash-x") == 3
+        got = await resolve_dataset_ref(store, "dataset:facts@latest")
+        assert (got["version"], got["content_hash"]) == (3, "hash-x")
+        assert [v["version"] for v in await store.list_dataset_versions("facts")] == [3]
+        with pytest.raises(KeyError):
+            await resolve_dataset_ref(store, "dataset:facts@2")
+    assert await store.register_dataset_version("facts", "hash-b1", workspace_id="ws-b") == 4
+    # the deployment's view is unchanged
     assert [v["version"] for v in await store.list_dataset_versions("facts")] == [2, 1]
     got = await resolve_dataset_ref(store, "dataset:facts@latest")
-    assert got["content_hash"] == "hash-a2"                       # the owner's head did not move
+    assert (got["version"], got["content_hash"]) == (2, "hash-a2")
+    with pytest.raises(KeyError):
+        await resolve_dataset_ref(store, "dataset:facts@3")
+    assert (await store.list_datasets())[0]["latest_version"] == 2
+    # and the other way round: the deployment uses a tenant's name
+    assert await store.register_dataset_version("mine", "hash-x") == 2
+    with workspace_scope("ws-b"):
+        got = await resolve_dataset_ref(store, "dataset:mine")
+        assert (got["version"], got["content_hash"]) == (1, "hash-b1")
 
 
-async def test_the_first_versions_workspace_keeps_its_name(store):
-    """A row another workspace appended earlier does not take the name over."""
+async def test_reregistration_compares_with_the_workspaces_own_head(store):
+    """The identical-bytes no-op compares with the registering workspace's own
+    head, never another workspace's row; the number continues past every row."""
     _legacy_row(store, "facts", 3, "hash-x", "ws-b")
-    with workspace_scope("ws-b"), pytest.raises(DatasetNameUnavailable):
-        await store.register_dataset_version("facts", "hash-b1")
-    # the owner registers on; the number continues past the legacy row and the
-    # identical-bytes no-op compares with the owner's own head, not ws-b's row
     assert await store.register_dataset_version("facts", "hash-x") == 4
     assert await store.register_dataset_version("facts", "hash-x") == 4
+    with workspace_scope("ws-b"):
+        assert await store.register_dataset_version("facts", "hash-x") == 3   # its own head
+        assert await store.register_dataset_version("facts", "hash-b1") == 5
     rows = {v["version"]: v["workspace_id"] for v in await store.list_dataset_versions("facts")}
     assert rows == {4: "default", 2: "default", 1: "default"}
     with workspace_scope("ws-b"):
-        assert [v["version"] for v in await store.list_dataset_versions("facts")] == [3]
+        assert [v["version"] for v in await store.list_dataset_versions("facts")] == [5, 3]
 
 
 async def test_default_workspace_registration_is_unchanged(store):
@@ -219,10 +249,13 @@ async def test_leg_registration_lands_in_the_runs_workspace(store):
         assert out["dataset_versions"] == ["pairs@1"]
         assert (await resolve_dataset_ref(store, "dataset:pairs"))["content_hash"] == "hash-x"
     assert await store.get_dataset_version("pairs") is None
-    # a tenant leg exporting under the deployment's name fails loudly
+    # a tenant leg exporting under a name the deployment uses gets its own version
     d2 = _desc("hash-x", "s3://x/x.jsonl", register_as="facts")
-    with workspace_scope("ws-b"), pytest.raises(DatasetNameUnavailable):
-        await _register_dataset_versions([d2], store, "run-b", {})
+    out2: dict = {}
+    with workspace_scope("ws-b"):
+        await _register_dataset_versions([d2], store, "run-b", out2)
+    assert out2["dataset_versions"] == ["facts@3"]
+    assert (await resolve_dataset_ref(store, "dataset:facts"))["content_hash"] == "hash-a2"
 
 
 async def test_auth_on_leg_registration_outside_any_workspace_scope_is_refused(store, monkeypatch):

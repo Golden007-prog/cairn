@@ -11,7 +11,7 @@ implemented unless a PR is named.
 - **Artifact** (bytes): a content-addressed `ArtifactRecord` whose `id` is the sha256 of the
   bytes (`src/cairn/core/storage/artifacts.py:55-70`) — see [artifacts.md](artifacts.md).
 - **Dataset version** (name): an append-only row `name@N` over one artifact
-  (`register_dataset_version`, `artifacts.py:94-101`; columns `artifacts.py:395-398`:
+  (`register_dataset_version`, `artifacts.py:94-101`; columns `artifacts.py:404-407`:
   `name, version, artifact_id, created_at, created_by, role, schema, column_mapping,
   parent_version, split_policy, workspace_id, verdict, verdict_reasons, verdict_report,
   verdict_at, dated_at, origin, origin_detail`). Re-registering the artifact already at a
@@ -27,8 +27,9 @@ inherited from the dataset name's defaults unless the producer declares otherwis
 ### References and resolution
 A leg input may be a path, an `s3://` URI, an HF id or a **registered ref**
 `dataset:<name>[@N]`. Refs resolve on the control plane before the engine sees them
-(`src/cairn/core/dispatch/leg_executor.py:185-201`): `resolve_dataset_refs_in_config`
-rewrites each ref to `<uri>#sha256=<content_hash>` (`artifacts.py:1238-1272`); an unknown
+(flow legs `src/cairn/core/dispatch/leg_executor.py:229-246`, task legs
+`src/cairn/core/dispatch/pipeline_bridge.py:2029-2031`): `resolve_dataset_refs_in_config`
+rewrites each ref to `<uri>#sha256=<content_hash>` (`artifacts.py:1287-1325`); an unknown
 ref fails the leg at launch (`KeyError`). The consuming kernel strips the fragment and
 **verifies the bytes** it read against it, refusing on mismatch (`ingest.normalize`,
 `cairn/operators/official/dataset_checks/src/operator_dataset_checks/dataflow_stages.py:70-85`);
@@ -40,13 +41,14 @@ as `workspace_id`. The name, a pinned `@N` and `@latest` see only that workspace
 versions; another workspace's version reads as not found, the same as an unknown ref.
 With auth on, resolving outside any workspace scope raises `WorkspaceScopeRequired`.
 The registry's by-name reads (`get_dataset_version`, `list_dataset_versions`,
-`get_dataset_version_meta`, `list_datasets`) take an optional `workspace_id` and otherwise
-answer in the current workspace; `set_dataset_version_meta` / `set_dataset_version_verdict`
-change only a version of the current workspace. Version numbers are one sequence per name
-(the key is `(name, version)`), so a name belongs to the workspace of its first version:
-registering under a name another workspace holds raises `DatasetNameUnavailable`. A leg
-registers its exports in the run's workspace. Name-level metadata (`set_dataset_meta`) is
-still one row per name for the deployment.
+`get_dataset_version_meta`, `list_datasets`) and writes (`set_dataset_version_meta`,
+`set_dataset_version_verdict`) take an optional `workspace_id` and otherwise answer in the
+current workspace; a write never changes another workspace's version. Any workspace may
+register under any name: version numbers are one sequence per name (the key is
+`(name, version)`), so a workspace's versions of a name need not be consecutive, and the
+identical-bytes no-op compares with the registering workspace's own head. A leg registers
+its exports in the run's workspace. Name-level metadata (`set_dataset_meta`) is still one
+row per name for the deployment.
 
 ### Producer → consumer rules
 - A readiness/intake leg's export is described by the engine as an `ArtifactDescriptor`
