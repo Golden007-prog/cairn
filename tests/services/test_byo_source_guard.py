@@ -120,3 +120,40 @@ async def test_index_workspace_corpus_refuses_a_server_path_by_default(tmp_path,
     assert await index_workspace_corpus(corpus, allow_local=True) == "indexed"
     assert calls == [str(local)]
     assert local.is_dir()  # a local source is never cleaned up like a clone
+
+
+def test_a_tenant_clone_runs_without_the_servers_git_setup(git_stub, tmp_path, monkeypatch):
+    """No system/global git config (credential helpers, extra headers, url
+    rewrites), no credential helper, no terminal prompt, no redirects."""
+    import subprocess
+
+    from cairn.services.rag import byo
+
+    calls: list[tuple[list[str], dict]] = []
+
+    def _run(cmd, **kw):
+        calls.append((cmd, kw.get("env")))
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(byo.subprocess, "run", _run)
+    resolve_corpus_source("https://github.com/acme/docs.git", dest=str(tmp_path / "d"))
+    (cmd, env), = calls
+    assert cmd[:5] == ["git", "-c", "http.followRedirects=false", "-c", "credential.helper="]
+    assert cmd.index("credential.helper=") < cmd.index("clone")
+    assert env["GIT_ALLOW_PROTOCOL"] == "https"
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert env["GIT_CONFIG_GLOBAL"] == os.devnull
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_a_deployment_clone_keeps_the_servers_git_setup(git_stub, tmp_path, monkeypatch):
+    import subprocess
+
+    from cairn.services.rag import byo
+
+    calls: list[tuple[list[str], object]] = []
+    monkeypatch.setattr(byo.subprocess, "run",
+                        lambda cmd, **kw: calls.append((cmd, kw.get("env"))) or subprocess.CompletedProcess(cmd, 0))
+    resolve_corpus_source("git@github.com:acme/docs.git", dest=str(tmp_path / "d"), allow_local=True)
+    (cmd, env), = calls
+    assert env is None and cmd[:2] == ["git", "clone"]

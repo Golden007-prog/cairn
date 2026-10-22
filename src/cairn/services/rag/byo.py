@@ -11,10 +11,18 @@ isolate beyond the workspace-scoped vector collection).
 The source is caller-typed, so by default only a public ``https://`` git remote is
 cloned: it must pass the connection probe's address guard
 (:func:`cairn.core.connection_probe.probe_target_block_reason`), git is limited to
-the https protocol and does not follow redirects, and ``--`` ends git's options
-before the URL. ``file://``, local paths and ssh / ``file:`` git remotes need
+the https protocol and does not follow redirects, runs without this server's
+system/global git config (credential helpers, extra headers, url rewrites) or a
+terminal prompt, and ``--`` ends git's options before the URL. ``file://``, local paths and ssh / ``file:`` git remotes need
 ``allow_local=True``, which only a deployment caller passes. An option-shaped
 (``-…``) or ``<transport>::`` source is never cloned.
+
+Known limits of the address check: it resolves the host once, before git runs,
+so it does not defend against a name whose DNS answer changes between the check
+and the clone (DNS rebinding); and a host that does not resolve at check time
+passes it (git then fails to connect, or reaches whatever the name resolves to
+later). ``CAIRN_PROBE_ALLOW_PRIVATE`` relaxes the private-address part of the
+check for these clones too, not only for the connection probe.
   - ``s3://`` / ``artifact://`` → resolved via the account's connection / artifact
     storage (ADR-0062; not wired here — the git slice ships first).
 """
@@ -68,9 +76,19 @@ def _clone(clone_url: str, ref: Optional[str], dest: str, *, allow_local: bool) 
     """Shallow-clone an already-checked ``clone_url`` (see :func:`_clone_url`)."""
     env = None
     cmd = ["git"]
-    if not allow_local:  # https only, and a redirect cannot walk past the address check
-        env = {**os.environ, "GIT_ALLOW_PROTOCOL": "https"}
-        cmd += ["-c", "http.followRedirects=false"]
+    if not allow_local:
+        # https only; a redirect cannot walk past the address check; and none of
+        # this server's own git setup (system/global config: credential helpers,
+        # extra headers, url rewrites) or an interactive prompt rides along on a
+        # tenant's clone.
+        env = {
+            **os.environ,
+            "GIT_ALLOW_PROTOCOL": "https",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+        cmd += ["-c", "http.followRedirects=false", "-c", "credential.helper="]
     cmd += ["clone", "--depth", "1"]
     if ref:
         cmd += [f"--branch={ref}"]
