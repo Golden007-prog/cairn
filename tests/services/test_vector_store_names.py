@@ -90,8 +90,9 @@ def test_sqlite_creates_a_collection_once_per_store(tmp_path):
     async def _go():
         for _ in range(3):
             await store.initialize("c_one", 4)
+            assert store._collection == "c_one"  # a memoised call still selects
             await store.initialize("c_two", 4)
-        assert store._collection == "c_two"
+            assert store._collection == "c_two"
         await store.close()
         await store.initialize("c_one", 4)  # a closed store checks again
 
