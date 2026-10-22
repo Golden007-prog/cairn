@@ -608,6 +608,73 @@ def test_a_replay_after_the_family_was_signed_out_is_refused(store):
     asyncio.run(go())
 
 
+def test_a_replay_takes_over_from_one_that_stopped_half_way(store):
+    """Another replay of the same parent revoked the child and then stopped (slow
+    database, crashed process) before pointing the parent at its sibling. The
+    revoked child is dead either way, so the next replay renews instead of
+    spending its attempts waiting and revoking the family."""
+    async def go():
+        raw, row = await RT.issue(f"user-{uuid.uuid4().hex}", "acme", remember=True, store=store)
+        _, c1 = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        assert await store.revoke_unused(c1.token_hash, at=RT._iso(RT._now()))  # the stalled replay
+        raw2, c2 = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        assert await _live(store, c1, c2) == [c2]
+        parent = await store.get(row.token_hash)
+        assert parent.replaced_by == c2.token_hash and parent.revoked_at is None
+    asyncio.run(go())
+
+
+def test_a_family_revoked_in_the_middle_of_a_replay_refuses_it():
+    """The family is signed out between the replay's read of the parent and its
+    compare-and-set: the compare-and-set fails, the next pass finds the parent
+    revoked, and the replay is refused with its own new token revoked."""
+    class SignOutMidway(RT.InMemoryRefreshTokenStore):
+        async def set_replaced_by(self, token_hash, *, expected, new):
+            await self.revoke_family(self._rows[token_hash].family_id, at=RT._iso(RT._now()))
+            return await super().set_replaced_by(token_hash, expected=expected, new=new)
+
+    async def go():
+        store = SignOutMidway()
+        raw, row = await RT.issue("u-1", "acme", remember=True, store=store)
+        _, c1 = await RT.rotate(await RT.validate(raw, store=store), store=store)
+        replay = await RT.validate(raw, store=store)
+        with pytest.raises(RT.RefreshError, match="revoked"):
+            await RT.rotate(replay, store=store)
+        assert all(t.revoked_at for t in store._rows.values()), "nothing in the family is live"
+    asyncio.run(go())
+
+
+def test_a_replay_that_keeps_losing_the_race_gives_up_and_revokes_the_family(caplog):
+    """Every time this replay reaches the compare-and-set, another replay of the
+    same parent has just installed its own sibling. After the allowed number of
+    such changes the replay gives up and the family is revoked (WARNING)."""
+    class AlwaysBeaten(RT.InMemoryRefreshTokenStore):
+        calls = 0
+
+        async def set_replaced_by(self, token_hash, *, expected, new):
+            self.calls += 1
+            parent = self._rows[token_hash]
+            racer = parent.model_copy(update={"token_hash": f"racer-{self.calls}", "used_at": None,
+                                              "replaced_by": None, "revoked_at": None})
+            await self.insert(racer)
+            assert await super().set_replaced_by(token_hash, expected=parent.replaced_by,
+                                                 new=racer.token_hash)
+            return await super().set_replaced_by(token_hash, expected=expected, new=new)
+
+    async def go():
+        store = AlwaysBeaten()
+        raw, row = await RT.issue("u-1", "acme", remember=True, store=store)
+        await RT.rotate(await RT.validate(raw, store=store), store=store)
+        replay = await RT.validate(raw, store=store)
+        with caplog.at_level(logging.WARNING, logger="cairn.core.refresh_tokens"):
+            with pytest.raises(RT.RefreshError, match="reused"):
+                await RT.rotate(replay, store=store)
+        assert store.calls == RT._REPLAY_ATTEMPTS
+        assert all(t.revoked_at for t in store._rows.values()), "the family is revoked"
+        assert any("kept racing" in r.getMessage() for r in caplog.records)
+    asyncio.run(go())
+
+
 def test_the_winners_token_is_revoked_even_when_the_loser_revokes_first(monkeypatch):
     """The interleaving ``gather`` alone does not force: the winner's
     compare-and-set succeeds, then the loser fails its own and revokes the family

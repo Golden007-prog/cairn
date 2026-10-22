@@ -23,8 +23,13 @@ token was rotated into is revoked (the browser never stored it) and a new token 
 family takes its place (`replaced_by` points at it); the cookie is set and a fresh access token
 returned, exactly as for a normal refresh. A second replay of the same parent inside the window
 does the same again, revoking the previous sibling. The child is revoked with a conditional
-update (`… WHERE used_at IS NULL AND revoked_at IS NULL`), which is the lock: of two concurrent
-replays only one revokes a given child, and the other re-reads the parent.
+update (`… WHERE used_at IS NULL AND revoked_at IS NULL`), and the parent is pointed at the
+sibling with a compare-and-set on `replaced_by`, which is the decision: of two concurrent
+replays exactly one installs its sibling, and the other re-reads the parent and revokes that
+sibling in turn. A child another replay already revoked is dead either way, so a replay that
+finds it so goes straight to the compare-and-set instead of waiting for the other replay to
+finish. A replay gives up (and the family is revoked) only after five passes in which another
+replay installed its sibling first; a slow or stalled replay costs no attempts.
 
 **D3 — Never two live chains.** If the child the replayed token was rotated into has itself
 already been rotated, renewing beside it would leave two live chains, so that replay is reuse:

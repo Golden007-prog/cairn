@@ -488,8 +488,11 @@ async def rotate(row: RefreshToken, *, store: Any = None) -> tuple[str, RefreshT
     return raw, await _renew_replay(row, nxt, store=store)
 
 
-#: How many times a replay re-reads its parent when another replay of the same
-#: parent changed it in between. Each retry follows a change someone else made.
+#: How many times a replay tries to make itself its parent's child. A pass fails
+#: only when the parent's compare-and-set fails, that is when another replay of
+#: the same parent installed its own sibling in between (or the family was revoked,
+#: which the next pass refuses), so only real changes use up attempts; a replay
+#: that is merely slow, or stopped half way, uses none.
 _REPLAY_ATTEMPTS = 5
 
 
@@ -498,11 +501,15 @@ async def _renew_replay(row: RefreshToken, nxt: RefreshToken, *, store: Any) -> 
     only live child, or refuse (ADR-0144).
 
     Within :data:`REUSE_GRACE_SECONDS` of ``row``'s rotation, and while its family
-    is live: revoke the child ``row`` was rotated into, but only while that child
-    is unused (the conditional revoke is the lock: of two concurrent replays only
-    one revokes a given child), then point ``row`` at ``nxt``. A child that was
-    already used means a second chain grows from it, so that is reuse. Outside
-    the window it is reuse. Reuse revokes the family, as before."""
+    is live: revoke the child ``row`` was rotated into while that child is unused,
+    then point ``row`` at ``nxt`` with a compare-and-set on ``replaced_by``. That
+    compare-and-set is the decision: of two concurrent replays exactly one
+    installs its sibling, and the other re-reads the parent and revokes that
+    sibling in turn. A child another replay already revoked is dead either way,
+    so a replay that finds it so goes straight to the compare-and-set rather than
+    waiting for the other replay to finish. A child that was already used means a
+    second chain grows from it, so that is reuse. Outside the window it is reuse.
+    Reuse revokes the family, as before."""
     for _ in range(_REPLAY_ATTEMPTS):
         now = _now()
         parent = await store.get(row.token_hash)
@@ -515,15 +522,16 @@ async def _renew_replay(row: RefreshToken, nxt: RefreshToken, *, store: Any) -> 
         child = parent.replaced_by or ""
         if child and not await store.revoke_unused(child, at=_iso(now)):
             current = await store.get(child)
-            if current is not None and current.used_at is not None:
+            if current is None or current.used_at is not None:
                 await revoke_family(parent, reason="replay of a token whose child was already rotated",
                                     store=store)
                 raise RefreshError("reused")
-            continue  # another replay revoked that child first: re-read the parent
+            # revoked already (by another replay of this parent): dead either way
         if await store.set_replaced_by(parent.token_hash, expected=child, new=nxt.token_hash):
             logger.info("refresh token replayed within %ss of its rotation, renewed: sub=%s family=%s…",
                         REUSE_GRACE_SECONDS, parent.sub, parent.family_id[:8])
             return nxt
+        # the parent moved on: another replay installed its sibling first; go again
     await revoke_family(row, reason="replays of one token kept racing", store=store)
     raise RefreshError("reused")
 
