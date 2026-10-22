@@ -7,6 +7,14 @@ isolate beyond the workspace-scoped vector collection).
 
   - ``git+https://…`` / ``…​.git`` → shallow clone → index.
   - ``file://…`` → local dir (dev).
+
+The source is caller-typed, so by default only a public ``https://`` git remote is
+cloned: it must pass the connection probe's address guard
+(:func:`cairn.core.connection_probe.probe_target_block_reason`), git is limited to
+the https protocol and does not follow redirects, and ``--`` ends git's options
+before the URL. ``file://``, local paths and ssh / ``file:`` git remotes need
+``allow_local=True``, which only a deployment caller passes. An option-shaped
+(``-…``) or ``<transport>::`` source is never cloned.
   - ``s3://`` / ``artifact://`` → resolved via the account's connection / artifact
     storage (ADR-0062; not wired here — the git slice ships first).
 """
@@ -14,10 +22,12 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 from typing import Optional
+from urllib.parse import urlparse
 
 from cairn.services.rag.embeddings import rag_collection
 from cairn.services.rag.lifecycle import CorpusTarget
@@ -33,24 +43,61 @@ def is_git_source(source_uri: str) -> bool:
             or "github.com" in s or "gitlab.com" in s or "bitbucket.org" in s)
 
 
-def _clone(url: str, ref: Optional[str], dest: str) -> None:
+_TRANSPORT_RE = re.compile(r"^[A-Za-z0-9+.-]+::")  # git's <transport>::<address> remote helpers
+
+
+def _clone_url(url: str, *, allow_local: bool) -> str:
+    """The URL git may clone, or ``ValueError``: never option-shaped or a remote
+    helper; without ``allow_local`` only a public ``https://`` address."""
     clone_url = url[4:] if url.lower().startswith("git+") else url  # strip git+
-    cmd = ["git", "clone", "--depth", "1"]
+    if clone_url.lstrip().startswith("-") or _TRANSPORT_RE.match(clone_url):
+        raise ValueError("corpus source is not a git URL")
+    if not allow_local:
+        parsed = urlparse(clone_url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("corpus source must be an https:// git URL")
+        from cairn.core.connection_probe import probe_target_block_reason  # lazy: httpx off import path
+
+        blocked = probe_target_block_reason(clone_url)
+        if blocked:
+            raise ValueError(f"corpus source is not allowed: {blocked}")
+    return clone_url
+
+
+def _clone(clone_url: str, ref: Optional[str], dest: str, *, allow_local: bool) -> None:
+    """Shallow-clone an already-checked ``clone_url`` (see :func:`_clone_url`)."""
+    env = None
+    cmd = ["git"]
+    if not allow_local:  # https only, and a redirect cannot walk past the address check
+        env = {**os.environ, "GIT_ALLOW_PROTOCOL": "https"}
+        cmd += ["-c", "http.followRedirects=false"]
+    cmd += ["clone", "--depth", "1"]
     if ref:
-        cmd += ["--branch", ref]
-    cmd += [clone_url, dest]
-    subprocess.run(cmd, check=True, capture_output=True, timeout=_GIT_TIMEOUT_S)
+        cmd += [f"--branch={ref}"]
+    cmd += ["--", clone_url, dest]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=_GIT_TIMEOUT_S, env=env)
 
 
-def resolve_corpus_source(source_uri: str, *, ref: Optional[str] = None, dest: Optional[str] = None) -> str:
+def resolve_corpus_source(
+    source_uri: str, *, ref: Optional[str] = None, dest: Optional[str] = None, allow_local: bool = False
+) -> str:
     """Resolve a governed source ref to a LOCAL directory of documents. The
     caller owns cleanup of a cloned dir (use ``index_workspace_corpus``, which
-    does it). Raises for schemes not yet wired (s3/artifact = #517 follow-up)."""
+    does it). Raises for schemes not yet wired (s3/artifact = #517 follow-up).
+
+    ``allow_local`` (deployment callers only) admits ``file://`` sources, local
+    paths and ssh / ``file:`` git remotes; without it only a public ``https://``
+    git URL is accepted (``ValueError`` otherwise)."""
     if source_uri.startswith("file://"):
+        if not allow_local:
+            raise ValueError("file:// corpus sources are not allowed for this caller")
         return source_uri[len("file://"):]
     if is_git_source(source_uri):
+        clone_url = _clone_url(source_uri, allow_local=allow_local)  # refuse before making a temp dir
+        if ref and ref.lstrip().startswith("-"):
+            raise ValueError("corpus ref must be a branch or tag name")
         d = dest or tempfile.mkdtemp(prefix="cairn-byo-git-")
-        _clone(source_uri, ref, d)
+        _clone(clone_url, ref, d, allow_local=allow_local)
         return d
     if source_uri.startswith(("s3://", "artifact://")):
         raise NotImplementedError(
@@ -92,15 +139,16 @@ def workspace_corpus_targets_sync(workspace=None) -> list[CorpusTarget]:
     return workspace_corpus_targets(rows)
 
 
-async def index_workspace_corpus(corpus, *, catalog=None):
+async def index_workspace_corpus(corpus, *, catalog=None, allow_local: bool = False):
     """Resolve a BYO corpus's source → run it through the RAG pipeline (parse
     → chunk → embed → upsert) into its embedder-scoped collection — the same
     ``index_corpus`` packs use. Cloned dirs are cleaned up. Returns the
-    IndexResult (or a str on skip)."""
+    IndexResult (or a str on skip). ``allow_local`` as in
+    :func:`resolve_corpus_source` (deployment callers only)."""
     from cairn.services.rag.indexer import index_corpus  # lazy: LlamaIndex ingest chain
 
-    cloned = is_git_source(corpus.source_uri)
-    local_dir = resolve_corpus_source(corpus.source_uri)
+    cloned = is_git_source(corpus.source_uri) and not corpus.source_uri.startswith("file://")
+    local_dir = resolve_corpus_source(corpus.source_uri, allow_local=allow_local)
     corpus_id = f"ws:{corpus.workspace_id}/{corpus.name}"
     collection = rag_collection(corpus.name)
     try:
