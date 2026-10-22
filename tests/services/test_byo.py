@@ -28,7 +28,7 @@ def test_is_git_source():
 
 def test_resolve_file_uri(tmp_path):
     (tmp_path / "a.md").write_text("hi")
-    assert resolve_corpus_source(f"file://{tmp_path}") == str(tmp_path)
+    assert resolve_corpus_source(f"file://{tmp_path}", allow_local=True) == str(tmp_path)
 
 
 def test_resolve_s3_not_wired_yet():
@@ -45,7 +45,7 @@ def test_resolve_git_clones_the_repo(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True, env=env)
     subprocess.run(["git", "add", "."], cwd=repo, check=True, env=env)
     subprocess.run(["git", "commit", "-q", "-m", "x"], cwd=repo, check=True, env=env)
-    dest = resolve_corpus_source(f"git+file://{repo}")
+    dest = resolve_corpus_source(f"git+file://{repo}", allow_local=True)  # a deployment caller
     try:
         assert Path(dest, "runbook.md").is_file()  # cloned the docs
     finally:

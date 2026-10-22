@@ -3,12 +3,12 @@ ADR-0072), plus the console-installed pack uninstall (ADR-0045).
 
 Extracted verbatim from server.py (#1191).
 """
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from cairn.core.triggers import console_support as support
-from cairn.core.triggers.auth import require_auth
+from cairn.core.triggers.auth import require_admin
 from cairn.core.workspace import current_workspace
 
 
@@ -27,12 +27,18 @@ def build_templates_router(dispatcher=None) -> APIRouter:
 
     r = APIRouter()
 
-    @r.post("/registry/uninstall", dependencies=[Depends(require_auth)])
-    async def registry_uninstall(body: InstallRequest) -> dict[str, Any]:
+    @r.post("/registry/uninstall")
+    async def registry_uninstall(
+        body: InstallRequest,
+        admin: Annotated[Optional[str], Depends(require_admin)],
+    ) -> dict[str, Any]:
         """Uninstall a *console-installed* pack (v1, ADR-0045): guard (must have an
         install record) → uv uninstall → record removed. RCE-class + destructive,
         so auth-gated; engine-bundled/editable packs (no record) are refused with
         409. Restart-to-deactivate — it stays imported until the next start."""
+        # cairn-platform#223 — a pack is process-wide, so the deployment admin's
+        # alone: with auth on, anyone else (an account owner too) gets 403.
+        support.require_deployment_admin(admin)
         # lazy: keep the uninstaller + catalog off the import path
         from cairn.core.registry_install import (
             PackInstallUnsupportedError,

@@ -5,6 +5,8 @@ Extracted verbatim from server.py (#1191). Two factories because the
 spec-declared trigger routes (§24.2) mount BETWEEN these surfaces in
 server.py — route order is part of the committed OpenAPI contract.
 """
+import inspect
+import logging
 from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -13,7 +15,7 @@ from pydantic import BaseModel, Field
 from cairn.core._time import utc_now_iso
 from cairn.core.engine.schema import ApprovalRecord, TriggerEvent
 from cairn.core.triggers import console_support as support
-from cairn.core.triggers.auth import _oauth2_scheme, is_env_admin, require_admin
+from cairn.core.triggers.auth import _oauth2_scheme, auth_enabled, decode_subject, is_env_admin, require_admin
 from cairn.core.triggers.routers.reviews import decision_actor
 
 _APPROVE = ("approve", "approved", "yes", "y")
@@ -27,6 +29,46 @@ class SagaApprovalRequest(BaseModel):
     decision: str = Field(..., description="'approve' | 'reject' (or approved/yes/y, rejected/no/n)")
     approver: str = Field("slack-user", description="accepted for old clients; under auth the caller is recorded")
     note: Optional[str] = Field(None, description="free-text note recorded on the approval")
+
+
+async def _assert_may_decide_saga(handler: Any, workflow_id: str, token: Optional[str]) -> None:
+    """cairn-platform#223 — a saga is decided only from the account that owns it.
+
+    ``writable_workspace`` checks the workspace the caller acts in, not the
+    saga's. The saga's workspace comes from the action handler
+    (``workspace_of(workflow_id)``, sync or async — the same duck-typed handler
+    surface ``resume`` is); the caller's account must own it. A handler that
+    cannot say (no ``workspace_of``, or it answers nothing or fails) leaves the
+    saga to the deployment admin, who decides any saga. Every refusal is the
+    same 404 as an unknown saga, so another account's saga ids do not leak.
+    Auth off (keyless dev) is unchanged."""
+    if not auth_enabled():
+        return
+    if is_env_admin(decode_subject(token) if token else None):
+        return
+    from cairn.core.workspace import WorkspaceForbidden, assert_workspace_allowed  # noqa: PLC0415 — routers ↔ server cycle
+
+    ws: Any = None
+    workspace_of = getattr(handler, "workspace_of", None)
+    if callable(workspace_of):
+        try:
+            ws = workspace_of(workflow_id)
+            if inspect.isawaitable(ws):
+                ws = await ws
+        except Exception:  # noqa: BLE001 — cannot attribute the saga → fail closed
+            logging.getLogger(__name__).warning("workspace_of(%s) failed; refusing the decision",
+                                                workflow_id, exc_info=True)
+            ws = None
+    # A blank id would read as "no workspace asserted", which assert_workspace_allowed
+    # permits: normalise first so a handler answering "" or "  " also fails closed.
+    ws = str(ws).strip() if ws is not None else ""
+    if ws:
+        try:
+            await assert_workspace_allowed(ws, await support.caller_account(token))
+            return
+        except WorkspaceForbidden:
+            pass
+    raise HTTPException(status_code=404, detail=f"no saga {workflow_id!r} awaiting a decision here")
 
 
 def build_ingress_router(dispatcher, environment, runner) -> APIRouter:
@@ -161,6 +203,7 @@ def build_ingress_router(dispatcher, environment, runner) -> APIRouter:
                     "to a durable handler so approvals can pause/resume (ADR-0024 RM3)"
                 ),
             )
+        await _assert_may_decide_saga(handler, workflow_id, token)
         try:
             outcome = await resume(workflow_id, record)
         except Exception as exc:  # noqa: BLE001
