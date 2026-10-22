@@ -11,20 +11,20 @@ isolate beyond the workspace-scoped vector collection).
 The source is caller-typed, so by default only a public ``https://`` git remote is
 cloned: it must pass the connection probe's address guard
 (:func:`cairn.core.connection_probe.probe_target_block_reason`), git is limited to
-the https protocol and does not follow redirects, runs without this server's
+the https protocol and does not follow redirects, it runs without this server's
 system/global git config (credential helpers, extra headers, url rewrites) or a
-terminal prompt, and ``--`` ends git's options before the URL. ``file://``, local paths and ssh / ``file:`` git remotes need
-``allow_local=True``, which only a deployment caller passes. An option-shaped
-(``-…``) or ``<transport>::`` source is never cloned.
+terminal prompt, and ``--`` ends git's options before the URL. ``file://``, local
+paths and ssh / ``file:`` git remotes need ``allow_local=True``, which only a
+deployment caller passes. An option-shaped (``-…``) or ``<transport>::`` source is
+never cloned.
+  - ``s3://`` / ``artifact://`` → resolved via the account's connection / artifact
+    storage (ADR-0062; not wired here — the git slice ships first).
 
 Known limits of the address check: it resolves the host once, before git runs,
 so it does not defend against a name whose DNS answer changes between the check
-and the clone (DNS rebinding); and a host that does not resolve at check time
-passes it (git then fails to connect, or reaches whatever the name resolves to
-later). ``CAIRN_PROBE_ALLOW_PRIVATE`` relaxes the private-address part of the
+and the clone (DNS rebinding), and a host that does not resolve at check time
+passes it. ``CAIRN_PROBE_ALLOW_PRIVATE`` relaxes the private-address part of the
 check for these clones too, not only for the connection probe.
-  - ``s3://`` / ``artifact://`` → resolved via the account's connection / artifact
-    storage (ADR-0062; not wired here — the git slice ships first).
 """
 from __future__ import annotations
 
