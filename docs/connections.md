@@ -30,6 +30,28 @@ cairn connect rm <name>
 produces a working `api_key` connection pointed at `OPENAI_API_KEY` with no
 flags. Aliases: `hf`→huggingface, `claude`→anthropic, `google`→gemini, `k8s`→kube.
 
+## Accounts
+
+With auth on, a connection belongs to the account that created it. A connection
+of any account other than the deployment's own `default` resolves only the secret
+references stored for that account (`mint_ref(conn, key, account_id=…)` makes
+`cairn://secrets#<account>/<conn>-<KEY>`; `resolve_secret(ref, account_id=…)` and
+`put_secret(ref, value, account_id=…)` hold to it). A bare name or `${env:NAME}`
+(the server's environment), the deployment's stored secrets and another account's
+resolve to nothing, the catalog's environment-variable defaults are not applied
+(`connection_from_provider(…, account_id=…)` refuses a reference from outside the
+account), and an OAuth connection reads the token stored under its own name. The
+`default` account, and with it every single-node or auth-off deployment, is
+unchanged, and references stored before accounts were namespaced keep resolving
+for it.
+
+An MCP connection becomes a client spec through `mcp_server_spec`, which fails
+closed: a `stdio` server (a command run on the cairn server) is built only when
+the caller passes `allow_stdio=True`, and an http/sse `url` must pass the probe's
+address guard (no loopback, link-local, cloud metadata or private address) unless
+the caller passes `allow_private_network=True`. Only the deployment's own callers
+pass either.
+
 ## OAuth connections (ADR-0037)
 
 Providers that use OAuth 2.0 (GitHub, Slack, Jira, Notion, Google) are brokered.
