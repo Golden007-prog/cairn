@@ -60,7 +60,7 @@ from cairn.core.runtime.node_events import (
     bound_node_output as _bound_node_output,  # re-exported for tests + back-compat
     node_event_data,
 )
-from cairn.core.workspace import current_workspace
+from cairn.core.workspace import current_workspace, workspace_scope
 
 logger = logging.getLogger("cairn.dispatcher")
 
@@ -1148,7 +1148,9 @@ class RunDispatcher:
                 # is resumable by Run.id via resume_run (#38 / #113).
                 # Per-node events stream onto the run log as each node completes
                 # (ADR-0044) — the canvas lights up mid-run instead of all-at-once.
-                with node_sink_scope(self._node_sink(inv.id)), span("cairn.run", {
+                # the run's own workspace (and so its account's connections and
+                # secrets), whatever context this task was spawned from
+                with workspace_scope(inv.workspace_id), node_sink_scope(self._node_sink(inv.id)), span("cairn.run", {
                     "run_id": inv.id, "workspace_id": inv.workspace_id,
                     "lane": inv.lane, "template": template_ref,
                 }):
@@ -1395,7 +1397,8 @@ class RunDispatcher:
             await self.store.update(run_id, owner=me)
         # keep streaming per-node events after the resume (ADR-0044).
         from cairn.core.operator.runtime import launch_scope  # noqa: PLC0415 — ADR-0120 D7 (#2455)
-        with node_sink_scope(self._node_sink(run_id)), launch_scope(self.launch_handle()):
+        with workspace_scope(run.workspace_id), node_sink_scope(self._node_sink(run_id)), \
+                launch_scope(self.launch_handle()):
             result = await runtime.resume(graph, decision, run_id=run_id)
         still_paused = isinstance(result, dict) and "__interrupt__" in result
         # ADR-0065: if the resume re-paused on a remote job, that's RUNNING, not

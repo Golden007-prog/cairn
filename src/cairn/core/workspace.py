@@ -27,6 +27,7 @@ from __future__ import annotations
 from cairn.core.settings import getenv
 
 import asyncio
+import contextlib
 import os
 import re
 import sqlite3
@@ -68,6 +69,22 @@ def set_current_workspace(workspace_id: Optional[str]) -> Token:
 def reset_current_workspace(token: Token) -> None:
     """Restore the prior request-scoped workspace (pairs with :func:`set_current_workspace`)."""
     _active.reset(token)
+
+
+@contextlib.contextmanager
+def workspace_scope(workspace_id: Optional[str]):
+    """Make ``workspace_id`` the :func:`current_workspace` for the block.
+
+    The dispatch layer enters it from a run's RECORD wherever it executes work
+    outside the request that started it (a pipeline leg advanced off a bus event,
+    a resumed run, a Temporal activity), so everything resolved inside — the
+    run's connections and secrets among it — is resolved for the workspace the
+    record names, not whichever context the executing task happened to inherit."""
+    token = set_current_workspace(workspace_id)
+    try:
+        yield
+    finally:
+        reset_current_workspace(token)
 
 
 def workspace_blob_path(workspace_id: str, *parts: str) -> str:
@@ -345,6 +362,20 @@ def get_workspace_store() -> Any:
         else:
             _store = SqliteWorkspaceStore()
     return _store
+
+
+async def workspace_account(workspace_id: Optional[str] = None, *, store: Any = None) -> str:
+    """The account that owns ``workspace_id`` (default: :func:`current_workspace`).
+
+    This is the account a run in that workspace resolves connections and secrets
+    in. A workspace no store holds (keyless dev naming an id, the implicit
+    ``default`` before anything created it) belongs to the deployment's
+    ``default`` account. A store error propagates: a caller resolving credentials
+    must not fall back to the deployment's on an unknown answer."""
+    ws_id = (workspace_id or current_workspace()).strip() or DEFAULT_WORKSPACE
+    ws = await (store or get_workspace_store()).get(ws_id)
+    acct = (getattr(ws, "account_id", "") or "").strip() if ws is not None else ""
+    return acct or DEFAULT_ACCOUNT
 
 
 # ── authorization (#1610, ADR-0094 D3/D4) ─────────────────────────────────

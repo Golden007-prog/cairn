@@ -60,10 +60,10 @@ def build_templates_router(dispatcher=None) -> APIRouter:
         remediation under that execution profile. 404 if unregistered."""
         # lazy: avoid a core.triggers → cairn.ask import at module load
         from cairn.core.ui_contract import build_ui_contract
-        from cairn.core.connections import default_connection_store
+        from cairn.core.connections import lookup_account, default_connection_store, run_account
         ref = f"{pack}/{template}"
         try:
-            conns = await default_connection_store().list()
+            conns = await default_connection_store().list(lookup_account(await run_account()))
             connected = {c.name for c in conns if getattr(c, "kind", "") == "mcp"}
         except Exception:  # noqa: BLE001 — remediation is best-effort
             connected = set()

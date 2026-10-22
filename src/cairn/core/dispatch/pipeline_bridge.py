@@ -33,6 +33,7 @@ is Phase 4.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -50,6 +51,7 @@ from cairn.core.dispatch.leg_executor import LegOutcome, execute_leg, leg_kind_o
 from cairn.core.dispatch.leg_hooks import FlowLegHooks, flow_leg_record, pipeline_spent_usd
 from cairn.core.dispatch.pipeline_resume import plan_resume
 from cairn.core.dispatch.target_concurrency import in_flight_on_target, target_cap
+from cairn.core.workspace import workspace_scope
 from cairn.core.engine.pipeline_gate import GATE_STATUS, gate_context_for
 # #1791 — the approval-notification subscriber. Core→core; `gate_notify` pulls
 # the profile and the notifier registry lazily, so this adds no import weight.
@@ -321,6 +323,22 @@ _RUN_OPTION_KEYS = ("schema_hash", "resolved_operators", "config_preset", "sandb
 def _run_options(rec: PipelineRecord) -> dict[str, Any]:
     raw = (getattr(rec, "trigger", None) or {}).get("run_options") or {}
     return {k: raw[k] for k in _RUN_OPTION_KEYS if k in raw}
+
+def _in_record_workspace(method):
+    """Run a bridge method whose first argument is the pipeline record in that
+    record's workspace (``current_workspace()``). A leg is advanced off a bus
+    event, re-adopted at boot or resumed from a gate — never reliably inside the
+    request that launched it — so the record is what names the workspace, and
+    with it the account the leg's connections and secrets resolve in (#1639's
+    "from the RECORD" rule, applied to execution)."""
+
+    @functools.wraps(method)
+    async def wrapper(self: Any, rec: Any, *args: Any, **kwargs: Any) -> Any:
+        with workspace_scope(getattr(rec, "workspace_id", "") or ""):
+            return await method(self, rec, *args, **kwargs)
+
+    return wrapper
+
 
 class PipelineBridge:
     """Core-owned enforcer that advances bundle pipelines off run completions."""
@@ -1513,6 +1531,7 @@ class PipelineBridge:
                 await self._submit_step(rec, s, outputs, after_restart=after_restart)
         await self._settle(rec)
 
+    @_in_record_workspace
     async def _submit_step(self, rec: PipelineRecord, s: Any, outputs: dict, *,
                            after_restart: bool = False) -> None:
         """Resolve a ready step's inputs from persisted output + submit it as its OWN
@@ -1797,6 +1816,7 @@ class PipelineBridge:
             run_id=rec.pipeline_id,
         )
 
+    @_in_record_workspace
     async def _run_flow_leg(self, rec: PipelineRecord, s: Any, run: Any, resolved: dict,
                             *, adopt: Optional[dict] = None) -> None:
         """The background half of a flow leg: execute → persist outcome → emit the
@@ -1938,6 +1958,7 @@ class PipelineBridge:
             return None
         return run
 
+    @_in_record_workspace
     async def _run_task_leg(self, rec: PipelineRecord, s: Any, run: Any, resolved: dict) -> None:
         """The background half: resolve the op → validate → run → persist →
         emit terminal. An op failure is an OUTCOME (run `failed`, pipeline

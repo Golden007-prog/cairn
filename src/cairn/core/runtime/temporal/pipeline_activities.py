@@ -350,18 +350,23 @@ async def _run_flow_leg(
         logger.info("flow leg %s/%s: adopting engine job %s (attempt %s) — not resubmitting",
                     pipeline_id, step_id, prior_handle.get("job_id"), activity.info().attempt)
 
-    task = asyncio.ensure_future(execute_leg(
-        ref, inputs=resolved, engine=engine,
-        run_id=run.id,
-        series_id=series_id,
-        estimated_usd=float(gov.get("estimated_usd", 0.0) or 0.0),
-        spent_usd=spent_usd,
-        budget_usd=budget_usd,
-        poll_budget_s=float(step.get("timeout_s") or _FLOW_LEG_DEFAULT_BUDGET_S),
-        # ADR-0118 D8 — stage entries reach the leg exactly as through the bridge.
-        stage_contracts=recorded_stage_contracts(getattr(rec, "plan", None), step_id),
-        **hooks.execute_kwargs(retry=retry_policy, adopt=prior_handle),
-    ))
+    from cairn.core.workspace import workspace_scope  # noqa: PLC0415 — engine code stays out of workflow imports
+
+    # The worker has no request context: the record's workspace is the leg's, and
+    # with it the account its connections and secrets resolve in (bridge parity).
+    with workspace_scope(workspace_id):  # the task copies this context at creation
+        task = asyncio.ensure_future(execute_leg(
+            ref, inputs=resolved, engine=engine,
+            run_id=run.id,
+            series_id=series_id,
+            estimated_usd=float(gov.get("estimated_usd", 0.0) or 0.0),
+            spent_usd=spent_usd,
+            budget_usd=budget_usd,
+            poll_budget_s=float(step.get("timeout_s") or _FLOW_LEG_DEFAULT_BUDGET_S),
+            # ADR-0118 D8 — stage entries reach the leg exactly as through the bridge.
+            stage_contracts=recorded_stage_contracts(getattr(rec, "plan", None), step_id),
+            **hooks.execute_kwargs(retry=retry_policy, adopt=prior_handle),
+        ))
     while not task.done():
         activity.heartbeat()
         await asyncio.wait({task}, timeout=5.0)
