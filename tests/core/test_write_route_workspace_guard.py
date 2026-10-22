@@ -274,14 +274,16 @@ EXEMPT: dict[tuple[str, str], str] = {
         "account-level: archives one; needs an admin of the owning account (#157)",
     ("PATCH", "/workspaces/{workspace_id}"):
         "account-level: archives/restores one; needs an admin of the owning account (#157)",
-    # The pull lane is not a workspace route: these routes act in no workspace and `claim_next` is unscoped, so there
-    # is no workspace to assert. Its tenancy (which caller may claim or heartbeat
-    # which job) is NOT settled here; that gap is tracked privately as
-    # evs-cmd/cairn-platform#224.
+    # The pull lane is not a workspace route: these routes act in no workspace and
+    # `claim_next` takes any account's queued job, so there is no workspace to
+    # assert. Who may call them is a credential rule instead (cairn-platform#224,
+    # tests/core/test_jobs_claim_worker_credential.py): only a worker credential
+    # (the deployment admin or a worker-pool token) claims or heartbeats; a
+    # run-scoped token heartbeats only its own run's job; a user's token gets 403.
     ("POST", "/jobs/{job_id}/heartbeat"):
-        "pull lane, not a workspace route; its tenancy gap is tracked as cairn-platform#224",
+        "pull lane, no workspace: a worker credential, or a run-scoped token for its own job",
     ("POST", "/jobs/claim"):
-        "pull lane, not a workspace route; its tenancy gap is tracked as cairn-platform#224",
+        "pull lane, no workspace: only a worker credential (deployment admin or worker-pool token)",
     ("POST", "/registry/install"):
         "deployment-level, the deployment admin only (cairn-platform#223); refused by posture (501, #1545 D2)",
     ("POST", "/registry/uninstall"):
