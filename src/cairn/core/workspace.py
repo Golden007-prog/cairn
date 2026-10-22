@@ -148,7 +148,9 @@ def _collection_prefix(workspace_id: str) -> str:
     A slug id longer than :data:`MAX_WORKSPACE_ID_LEN` (created before the cap)
     takes the hashed form, so its prefix stays short too."""
     if _SLUG_WORKSPACE_ID.fullmatch(workspace_id) and len(workspace_id) <= MAX_WORKSPACE_ID_LEN:
-        return f"ws_{workspace_id.replace('-', '_')}__"
+        # a slug's dashes become underscores (the backend-safe alphabet) — the same
+        # sanitizing this prefix always used, so existing collection names hold
+        return f"ws_{re.sub(r'[^A-Za-z0-9_]+', '_', workspace_id)}__"
     digest = hashlib.sha256(workspace_id.encode("utf-8")).hexdigest()[:16]
     return f"ws__{digest}__"
 
