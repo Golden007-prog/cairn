@@ -343,8 +343,10 @@ async def _run_template_async(
     from cairn.core import obs
     try:
         compiled = compile_template(template_path)
-        if mock and compiled.unsupported_mock_operators:
-            operators = ", ".join(compiled.unsupported_mock_operators)
+        # A compiled template predating the field (or a test double) has none.
+        unsupported = getattr(compiled, "unsupported_mock_operators", ()) or ()
+        if mock and unsupported:
+            operators = ", ".join(unsupported)
             raise MockModeUnsupportedOperatorsError(
                 "--mock cannot run this template because these operators do not "
                 f"declare supports_mock: {operators}. No operators or LLM calls were executed."
