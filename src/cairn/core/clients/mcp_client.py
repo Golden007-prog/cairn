@@ -14,6 +14,9 @@ Public surface:
     MultiServerMCPClient connection spec (ValueError when not MCP-shaped, or
     when it would start a process or reach an internal address the caller
     did not allow)
+  - ``no_redirect_http_client(headers, timeout, auth)`` — the
+    ``httpx_client_factory`` a tenant (``allow_private_network=False``) spec
+    carries: the SDK's client with redirects off
   - ``discover_tools(name, spec, timeout=…)`` — short-lived session →
     ``tools/list`` → read-only ``[{name, description, inputs, input_schema}]``
     (#355; the schema itself since ADR-0101 D5)
@@ -40,6 +43,7 @@ __all__ = [
     "slack_post",
     "is_configured",
     "mcp_server_spec",
+    "no_redirect_http_client",
     "discover_tools",
     "discover_tools_cached",
     "reset_tools_cache",
@@ -82,6 +86,15 @@ def mcp_server_spec(
     link-local, cloud metadata or, unless ``CAIRN_PROBE_ALLOW_PRIVATE``, private
     address) unless ``allow_private_network=True``. Both are the deployment's
     call to make, not a tenant connection's.
+
+    Without ``allow_private_network`` the http/sse spec also carries
+    ``httpx_client_factory=``:func:`no_redirect_http_client`, so the client
+    never follows a redirect past the check. With it the spec is unchanged
+    (the SDK's default client, which follows redirects): the deployment already
+    trusts where it points. Known limits of the address check: it resolves the
+    host once, at spec-build time, so it does not defend against DNS
+    rebinding, and a host that does not resolve then passes it.
+    ``CAIRN_PROBE_ALLOW_PRIVATE`` relaxes its private-address rule here too.
     """
     cfg = dict(config or {})
     live = {str(k): str(v) for k, v in (secrets or {}).items() if v}
@@ -131,6 +144,11 @@ def mcp_server_spec(
         }
         if headers:
             spec["headers"] = headers
+        if not allow_private_network:
+            # The address check above runs once; the MCP SDK's default client
+            # follows redirects, so a checked URL could 30x somewhere the check
+            # would refuse. A tenant spec's client never follows one.
+            spec["httpx_client_factory"] = no_redirect_http_client
         return spec
 
     if transport == "stdio":
@@ -152,6 +170,31 @@ def mcp_server_spec(
         "no MCP endpoint in the connection config — set a 'url' (streamable_http/sse) "
         "or a 'command' (stdio)"
     )
+
+
+def no_redirect_http_client(
+    headers: dict[str, str] | None = None,
+    timeout: Any = None,
+    auth: Any = None,
+) -> Any:
+    """``httpx_client_factory`` for a tenant MCP spec: the MCP SDK's own
+    ``create_mcp_http_client`` (same defaults and signature —
+    ``McpHttpClientFactory`` in ``mcp.shared._httpx_utils``) except that it
+    never follows a redirect, so the address check in :func:`mcp_server_spec`
+    is the only hop the client takes. A 30x surfaces as a failed request."""
+    import httpx  # lazy: httpx off import path
+
+    kwargs: dict[str, Any] = {
+        "follow_redirects": False,
+        # the SDK's MCP_DEFAULT_TIMEOUT / MCP_DEFAULT_SSE_READ_TIMEOUT (mcp 1.27);
+        # a test pins this against create_mcp_http_client so drift shows up
+        "timeout": timeout if timeout is not None else httpx.Timeout(30.0, read=300.0),
+    }
+    if headers is not None:
+        kwargs["headers"] = headers
+    if auth is not None:
+        kwargs["auth"] = auth
+    return httpx.AsyncClient(**kwargs)
 
 
 def _first_line(text: Any, cap: int = 240) -> str:
