@@ -246,6 +246,9 @@ _WORKER_POOL_ROUTES = (
 #: How long a worker-pool token lives unless its minter says otherwise. A pull
 #: worker runs unattended, so the 30-minute session default would stop it.
 WORKER_POOL_TOKEN_DAYS = 30
+#: The longest a worker-pool token may live: it cannot be revoked short of
+#: rotating CAIRN_JWT_SECRET, so it must expire.
+WORKER_POOL_TOKEN_MAX_DAYS = 365
 
 
 def is_worker_pool_token(claims: dict[str, Any]) -> bool:
@@ -262,8 +265,8 @@ def mint_worker_pool_token(name: str, days: int = WORKER_POOL_TOKEN_DAYS) -> str
     clean = (name or "").strip()
     if not clean or any(ch.isspace() for ch in clean):
         raise ValueError("a worker-pool token needs a name without spaces, e.g. gpu-a")
-    if days < 1:
-        raise ValueError("a worker-pool token lives at least one day")
+    if not 1 <= days <= WORKER_POOL_TOKEN_MAX_DAYS:
+        raise ValueError(f"a worker-pool token lives 1 to {WORKER_POOL_TOKEN_MAX_DAYS} days")
     return create_access_token({"sub": f"{_WORKER_POOL_SUB_PREFIX}{clean}", "scope": WORKER_POOL_SCOPE},
                                expires_delta=timedelta(days=days))
 

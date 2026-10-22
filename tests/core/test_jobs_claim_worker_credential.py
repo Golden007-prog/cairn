@@ -251,3 +251,10 @@ def test_auth_off_a_keyless_worker_still_claims(monkeypatch, tmp_path):
         hb = c.post(f"/jobs/{JOB}/heartbeat", json={"worker_id": "w1"})
     assert r.status_code == 200 and r.json()["id"] == JOB, (r.status_code, r.text)
     assert hb.status_code == 200 and hb.json()["accepted"] is True, (hb.status_code, hb.text)
+
+
+@pytest.mark.parametrize("days", [0, 366, 10**9])
+def test_a_worker_pool_token_lifetime_is_bounded(env, days):
+    """It cannot be revoked short of rotating the signing secret, so it must expire."""
+    with pytest.raises(ValueError, match="1 to 365 days"):
+        auth.mint_worker_pool_token("gpu-a", days)

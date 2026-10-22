@@ -819,7 +819,7 @@ def hash_password_cmd(
 @app.command(name="worker-token")
 def worker_token_cmd(
     name: str = typer.Option(..., "--name", "-n", help="names the worker or pool, e.g. gpu-a"),
-    days: int = typer.Option(30, "--days", help="how long the token is valid"),
+    days: int = typer.Option(30, "--days", help="how long the token is valid (1-365 days)"),
 ):
     """Print a worker-pool token for `cairn worker --pull --token` (cairn-platform#224).
 
