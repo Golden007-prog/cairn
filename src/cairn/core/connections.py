@@ -934,14 +934,42 @@ async def resolve_connection_obj(conn: Connection) -> Optional[ResolvedConnectio
     )
 
 
-async def resolve_connection(name: str, *, store=None) -> Optional[ResolvedConnection]:
+async def run_account() -> str:
+    """The account the current run resolves connections in: the owner of
+    :func:`~cairn.core.workspace.current_workspace` (the dispatch layer scopes it
+    from the run's record). With auth off, ``default`` — the deployment — for any
+    context with no workspace in scope. With auth on, no workspace in scope is
+    refused (:class:`~cairn.core.workspace.WorkspaceScopeRequired`), as is a
+    workspace no store holds; the deployment's own tools pass ``account_id``."""
+    from cairn.core.workspace import workspace_account  # noqa: PLC0415 — lazy: keep this module import-light
+
+    return await workspace_account()
+
+
+def lookup_account(account_id: Optional[str]) -> str:
+    """The ``account_id`` a store read is filtered on: the tenant's own id, or
+    ``default`` for the deployment (no account, empty, or ``default``)."""
+    from cairn.core.secrets_store import scoped_account  # noqa: PLC0415 — lazy: crypto off import path
+
+    return DEFAULT_ACCOUNT if scoped_account(account_id) is None else str(account_id).strip()
+
+
+async def resolve_connection(
+    name: str, *, store=None, account_id: Optional[str] = None
+) -> Optional[ResolvedConnection]:
     """Resolve a connection by name: load it from the store, then resolve its
     secret refs (see :func:`resolve_connection_obj`). Returns ``None`` if the
-    connection is unknown or disabled. The runtime/operator wiring."""
+    connection is unknown or disabled. The runtime/operator wiring.
+
+    The lookup is scoped to one account: ``account_id``, or when omitted the
+    current run's (:func:`run_account`). A tenant account resolves only its own
+    rows; the deployment (``default``) only the deployment's. A single-node or
+    auth-off deployment, where every row is ``default``, is unchanged."""
+    acct = lookup_account(account_id if account_id is not None else await run_account())
     store = store or default_connection_store()
     close = getattr(store, "close", None)
     try:
-        conn = await store.get_by_name(name)
+        conn = await store.get_by_name(name, account_id=acct)
         if conn is None:
             return None
         return await resolve_connection_obj(conn)
@@ -950,11 +978,83 @@ async def resolve_connection(name: str, *, store=None) -> Optional[ResolvedConne
             close()
 
 
+def _declared_targets(conn: Connection, wanted: set[str], *, by_catalog: bool) -> dict[str, str]:
+    """``{logical key: declared target}`` for the keys of ``conn`` an operator's
+    ``secrets:`` block asks for. A key matches when its ref IS the target (the
+    catalog convention, ``{"KEY": "KAGGLE_KEY"}``). With ``by_catalog`` (a
+    tenant's connection, whose references are minted for its account and are
+    never an env name) it also matches when the key itself is the target
+    (``{"HF_TOKEN": <ref>}``) or when the provider catalog entry named by the
+    connection maps that key to the target."""
+    out: dict[str, str] = {}
+    defaults: dict[str, str] = {}
+    if by_catalog:
+        spec_key = resolve_provider_key(conn.name) or resolve_provider_key(str(conn.config.get("provider") or ""))
+        defaults = dict(PROVIDER_CATALOG[spec_key].secrets) if spec_key else {}
+    for logical, ref in (conn.secrets or {}).items():
+        if ref in wanted:
+            out[logical] = ref
+        elif by_catalog and logical in wanted:
+            out[logical] = logical
+        elif defaults.get(logical) in wanted:
+            out[logical] = defaults[logical]
+    return out
+
+
+async def declared_secret_values(
+    declared: Iterable[str], *, account_id: Optional[str] = None, store=None
+) -> dict[str, str]:
+    """The values of an operator's DECLARED secrets, from ``account_id``'s own
+    enabled connections (when omitted, the current run's account). Nothing is
+    written anywhere; a key no connection supplies is simply absent. Never
+    raises — a missing or broken connection supplies nothing."""
+    wanted = {d for d in declared if d}
+    if not wanted:
+        return {}
+    own = store is None
+    try:
+        acct = lookup_account(account_id if account_id is not None else await run_account())
+        store = store or default_connection_store()
+        try:
+            conns = await store.list(acct)
+        finally:
+            close = getattr(store, "close", None)
+            if own and callable(close):
+                close()
+    except Exception:  # noqa: BLE001 — cred bridging must never break dispatch
+        logger.warning("[secrets] could not list connections for declared secrets", exc_info=True)
+        return {}
+
+    tenant = acct != DEFAULT_ACCOUNT
+    values: dict[str, str] = {}
+    for conn in conns:
+        if not wanted:
+            break
+        if not getattr(conn, "enabled", True) or lookup_account(conn.account_id) != acct:
+            continue
+        targets = _declared_targets(conn, wanted, by_catalog=tenant)
+        if not targets:
+            continue
+        try:
+            resolved = await resolve_connection_obj(conn)
+        except Exception:  # noqa: BLE001 — one broken connection must not hide the others
+            logger.warning("[secrets] could not resolve connection %r", conn.name, exc_info=True)
+            continue
+        if resolved is None:
+            continue
+        for logical, target in targets.items():
+            value = resolved.secrets.get(logical)
+            if value and target in wanted:
+                values[target] = str(value)
+                wanted.discard(target)
+    return values
+
+
 async def inject_declared_secrets(
     declared: Iterable[str], *, account_id: Optional[str] = None
 ) -> list[str]:
     """Bridge the connection catalog → ``os.environ`` for an operator's DECLARED
-    secrets (#532).
+    secrets (#532), for a DEPLOYMENT run only.
 
     An operator that needs a credential declares it in its binding
     (``secrets: [KAGGLE_USERNAME, KAGGLE_KEY, HF_TOKEN]``). Those keys are env-var
@@ -967,39 +1067,35 @@ async def inject_declared_secrets(
     SecretStore see the credential. Without this the catalog holds creds the
     operator can't see.
 
+    Account scope: ``account_id`` (when omitted, the current run's account). The
+    deployment's (``default``) connections are the only candidates; a tenant
+    account's run writes NOTHING to the process environment, which every other
+    run shares — its values reach the operator through ``ctx.secrets`` instead
+    (:func:`declared_secret_values` + ``build_scoped_secrets``).
+
     Declared-scoped: only the exact targets the binding asks for are injected, so
     an unrelated step never gets another provider's secret. Existing env is NOT
     overridden (an explicit box env / test stub wins). Never raises — a missing or
     broken connection leaves the env exactly as it was."""
-    wanted = {d for d in declared if d and not os.environ.get(d)}
+    from cairn.core.secrets_store import scoped_account  # noqa: PLC0415 — lazy: crypto off import path
+
+    try:
+        acct = account_id if account_id is not None else await run_account()
+    except Exception:  # noqa: BLE001 — an unknown account injects nothing (never the deployment's by default)
+        logger.warning("[secrets] could not determine the run's account; nothing injected", exc_info=True)
+        return []
+    if scoped_account(acct) is not None:
+        return []
+    wanted = [d for d in declared if d and not os.environ.get(d)]
     if not wanted:
         return []
-    try:
-        store = default_connection_store()
-        conns = await store.list(account_id)
-    except Exception:  # noqa: BLE001 — cred bridging must never break dispatch
-        logger.warning("[secrets] could not list connections for injection", exc_info=True)
-        return []
-
+    values = await declared_secret_values(wanted, account_id=DEFAULT_ACCOUNT)
     injected: list[str] = []
-    for conn in conns:
-        if not wanted:
-            break
-        if not getattr(conn, "enabled", True):
-            continue
-        # Connection.secrets: logical key -> ref (the conventional env-var target).
-        targets = {logical: ref for logical, ref in (conn.secrets or {}).items() if ref in wanted}
-        if not targets:
-            continue
-        resolved = await resolve_connection(conn.name, store=store)
-        if resolved is None:
-            continue
-        for logical, env_target in targets.items():
-            value = resolved.secrets.get(logical)
-            if value and env_target in wanted:
-                os.environ[env_target] = str(value)
-                injected.append(env_target)
-                wanted.discard(env_target)
+    for target in wanted:
+        value = values.get(target)
+        if value and not os.environ.get(target):
+            os.environ[target] = value
+            injected.append(target)
     if injected:
         logger.info("[secrets] injected from connections: %s", ", ".join(injected))
     return injected

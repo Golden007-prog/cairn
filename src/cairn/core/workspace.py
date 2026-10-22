@@ -27,6 +27,7 @@ from __future__ import annotations
 from cairn.core.settings import getenv
 
 import asyncio
+import contextlib
 import os
 import re
 import sqlite3
@@ -68,6 +69,50 @@ def set_current_workspace(workspace_id: Optional[str]) -> Token:
 def reset_current_workspace(token: Token) -> None:
     """Restore the prior request-scoped workspace (pairs with :func:`set_current_workspace`)."""
     _active.reset(token)
+
+
+def workspace_scope(workspace_id: Optional[str]) -> Any:
+    """Make ``workspace_id`` the :func:`current_workspace` for the block.
+
+    The dispatch layer enters it from a run's RECORD wherever it executes work
+    outside the request that started it (a pipeline leg advanced off a bus event,
+    a resumed run, a Temporal activity), so everything resolved inside — the
+    run's connections and secrets among it — is resolved for the workspace the
+    record names, not whichever context the executing task happened to inherit.
+
+    A record that names no workspace means the implicit ``default`` with auth off
+    (today's behaviour). With auth on it raises :class:`WorkspaceScopeRequired`:
+    the record cannot say whose work it is, so nothing runs under a guess."""
+    if not (workspace_id or "").strip():
+        from cairn.core.auth_tokens import auth_enabled  # noqa: PLC0415 — keep the import graph of this module flat
+
+        if auth_enabled():
+            raise WorkspaceScopeRequired("the record names no workspace")
+    return _scope(workspace_id)
+
+
+@contextlib.contextmanager
+def _scope(workspace_id: Optional[str]):
+    token = set_current_workspace(workspace_id)
+    try:
+        yield
+    finally:
+        reset_current_workspace(token)
+
+
+def scoped_workspace() -> str:
+    """The workspace in scope (a request's, or a run's scoped from its record),
+    for work started on its behalf — a launch from inside a run lands where the
+    run is. With nothing in scope: the process default with auth off; with auth
+    on, :class:`WorkspaceScopeRequired`."""
+    ws = _active.get()
+    if ws:
+        return ws
+    from cairn.core.auth_tokens import auth_enabled  # noqa: PLC0415 — keep the import graph of this module flat
+
+    if auth_enabled():
+        raise WorkspaceScopeRequired("no workspace in scope to start work in")
+    return current_workspace()
 
 
 def workspace_blob_path(workspace_id: str, *parts: str) -> str:
@@ -347,6 +392,37 @@ def get_workspace_store() -> Any:
     return _store
 
 
+async def workspace_account(workspace_id: Optional[str] = None, *, store: Any = None) -> str:
+    """The account that owns ``workspace_id`` (default: :func:`current_workspace`).
+
+    This is the account a run in that workspace resolves connections and secrets
+    in. With auth on, omitting ``workspace_id`` outside any workspace scope (no
+    request, no run scoped from its record) raises :class:`WorkspaceScopeRequired`
+    rather than answering for the process default. With auth off, a workspace no
+    store holds (keyless dev naming an id)
+    belongs to the deployment's ``default`` account. With auth on, no account owns
+    such a workspace, so it raises :class:`WorkspaceForbidden` — the same answer
+    :func:`assert_workspace_allowed` gives. A store error propagates: a caller
+    resolving credentials must not fall back to the deployment's on an unknown
+    answer."""
+    from cairn.core.auth_tokens import auth_enabled  # noqa: PLC0415 — keep the import graph of this module flat
+
+    if not (workspace_id or "").strip() and _active.get() is None and auth_enabled():
+        # No workspace named and none in scope (no request, no record-scoped run):
+        # work that has lost its run's workspace — a template's operation node on a
+        # durable runtime's worker — must not resolve as the deployment.
+        raise WorkspaceScopeRequired(
+            "no workspace in scope: with auth on, connections and secrets resolve only "
+            "inside a run's workspace")
+    ws_id = (workspace_id or current_workspace()).strip() or DEFAULT_WORKSPACE
+    ws = await (store or get_workspace_store()).get(ws_id)
+    if ws is None:
+        if auth_enabled():
+            raise WorkspaceForbidden(ws_id)
+        return DEFAULT_ACCOUNT
+    return (getattr(ws, "account_id", "") or "").strip() or DEFAULT_ACCOUNT
+
+
 # ── authorization (#1610, ADR-0094 D3/D4) ─────────────────────────────────
 #
 # THE chokepoint. Before this, `_WorkspaceMiddleware` took the workspace from
@@ -361,6 +437,12 @@ def get_workspace_store() -> Any:
 # Keeping the decision here makes that a change to this function instead of to
 # every call site, which is the same reachability lesson as #1376/#1402: a
 # chokepoint must be a FUNCTION others call, not a BLOCK others copy.
+
+
+class WorkspaceScopeRequired(RuntimeError):
+    """Work that resolves an account's connections or secrets has no workspace to
+    resolve them in, and auth is on. Raised instead of resolving as the
+    deployment."""
 
 
 class WorkspaceForbidden(Exception):
