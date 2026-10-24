@@ -452,9 +452,12 @@ async def execute_leg(
                 # Strict like the door: an unrecorded data product is a
                 # governance hole, so a registry failure fails the leg loudly
                 # (the except below turns it into a failed outcome).
-                if descriptors and artifact_store is not None:
+                # ADR-0141 — the products stages named ride beside the per-stage descriptors
+                # (which the check above reads by position) and register through the same path.
+                named = list(getattr(result, "named_outputs", []) or [])
+                if (descriptors or named) and artifact_store is not None:
                     await register_leg_descriptors(
-                        descriptors, artifact_store, run_id=run_id,
+                        descriptors + named, artifact_store, run_id=run_id,
                         producer_job=str(getattr(handle, "job_id", "") or ""),
                         out_stats=out.stats)
                 # #1441 — the hold gives way to what the leg ACTUALLY spent (the
@@ -513,6 +516,22 @@ def _adopt_handle(persisted: Optional[dict]) -> Any:
     )
 
 
+async def cancel_recorded_job(engine: Any, persisted: Optional[dict]) -> bool:
+    """Best-effort cancel of the engine job a previous owner recorded
+    (``StepState.handle``), for a re-adopted leg that is refused before it is
+    watched: nothing would watch the job any more, and it would keep running
+    and billing. ``True`` when a cancel was sent; never raises."""
+    handle = _adopt_handle(persisted)
+    if handle is None or engine is None:
+        return False
+    try:
+        await engine.cancel(handle)
+    except Exception:  # noqa: BLE001 — best-effort: the refusal itself must still land
+        logger.exception("could not cancel recorded engine job %s", handle.job_id)
+        return False
+    return True
+
+
 #: Minimum seconds between heartbeat stamps — the poll loop can tick
 #: sub-second on quick legs, and a store write per tick is churn for a
 #: liveness signal whose reconciler TTL is minutes.
@@ -529,12 +548,16 @@ async def register_leg_descriptors(descriptors: list, artifact_store, *, run_id:
     registration and serving key on an id, never on a URI. Flow legs call it
     from :func:`execute_leg`; a task leg whose operator returns descriptors
     registers through the same function (#1488, wiring per producer)."""
+    _check_stage_roles(descriptors)
     await _resolve_uri_parents(descriptors, artifact_store)
     ids = [await artifact_store.register(d, producer_run_id=run_id, producer_job=producer_job)
            for d in descriptors]
     out_stats["artifact_ids"] = ids
     out_stats["artifact_uris"] = [str(getattr(d, "uri", "")) for d in descriptors]
-    models = [(i, d) for i, d in zip(ids, descriptors) if str(getattr(d, "kind", "")) == "model"]
+    # ADR-0141 — the candidate is a STAGE's model; a stage's named product (`output_name` in its
+    # stats, set by the runner) never displaces it.
+    models = [(i, d) for i, d in zip(ids, descriptors) if str(getattr(d, "kind", "")) == "model"
+              and "output_name" not in (getattr(d, "stats", None) or {})]
     if models:
         cid, cdesc = models[-1]
         out_stats["candidate_artifact_id"] = cid
@@ -556,6 +579,22 @@ def _annotate_check_evidence(stats: dict, flow_def: Any) -> None:
     stats.update(flatten_check_map(check_map_from_flow_stats(stats)))
 
 
+#: ADR-0141 D3 — the roles a stage may give the version it asks for. ``golden`` is human-rated
+#: only (ADR-0102 D3) and is never declared by a kernel's stats.
+STAGE_REGISTER_ROLES = ("training", "validation", "test")
+
+
+def _check_stage_roles(descriptors: list) -> None:
+    """Refuse a stage-given role outside :data:`STAGE_REGISTER_ROLES` BEFORE anything registers,
+    so a refusal leaves no artifact or version of the leg half-written."""
+    bad = sorted({str(r) for d in descriptors
+                  if (r := str((getattr(d, "stats", None) or {}).get("register_role") or "").strip())
+                  and r not in STAGE_REGISTER_ROLES})
+    if bad:
+        raise ValueError(f"a stage asked to register a dataset version with role(s) {bad}; a stage "
+                         f"may give only {list(STAGE_REGISTER_ROLES)} (ADR-0141 D3)")
+
+
 async def _register_dataset_versions(descriptors: list, artifact_store,
                                      run_id: str, out_stats: dict) -> None:
     """#1466 — an export that asked for registration (`register:` config →
@@ -569,11 +608,16 @@ async def _register_dataset_versions(descriptors: list, artifact_store,
     from cairn.core.workspace import scoped_workspace  # noqa: PLC0415 — off the hot import path
 
     for d in descriptors:
-        reg_name = str((getattr(d, "stats", None) or {}).get("register_as") or "")
+        d_stats = getattr(d, "stats", None) or {}
+        reg_name = str(d_stats.get("register_as") or "")
         if reg_name and hasattr(artifact_store, "register_dataset_version"):
+            # ADR-0141 D3 — a split's products say what they are FOR (`register_role`:
+            # training / validation / test, checked in `_check_stage_roles`), so the holdout
+            # door sees a test version as one. Unset keeps the dataset's default role.
+            role = str(d_stats.get("register_role") or "").strip()
             v = await artifact_store.register_dataset_version(
                 reg_name, str(getattr(d, "content_hash", "") or ""), actor=run_id,
-                workspace_id=scoped_workspace())
+                workspace_id=scoped_workspace(), **({"role": role} if role else {}))
             out_stats.setdefault("dataset_versions", []).append(f"{reg_name}@{v}")
             await _stamp_intake_verdict(artifact_store, reg_name, v, out_stats)
 
@@ -683,5 +727,5 @@ async def _poll_until_terminal(
         interval = min(interval * 1.5, _POLL_MAX_S)
 
 
-__all__ = ["FLOW_PREFIX", "TASK_PREFIX", "LegKindError", "LegOutcome", "execute_leg",
+__all__ = ["FLOW_PREFIX", "TASK_PREFIX", "LegKindError", "LegOutcome", "cancel_recorded_job", "execute_leg",
            "leg_kind_of", "parse_flow_ref", "recorded_stage_contracts"]

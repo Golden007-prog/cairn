@@ -54,6 +54,22 @@ it on the leg's `Run` (`llm_cost_usd` → `Run.cost`, `leg_hooks.flow_leg_record
 a failed leg, and a succeeded leg whose engine reported no cost (a GPU train stage today), records no
 `Run.cost` — unknown, never $0 (the payload still carries `llm_cost_usd`).
 
+**Descriptors and lineage.** `DataflowResult.output_artifacts` holds one descriptor per stage,
+in order (the stage-contract re-check reads it by position). Its parent is the previous stage's
+descriptor; stage 0's parents are the declared inputs, plus `source_hash` when the stage reports
+one (else its `source` URI, #1432). A stage's `output`, `content_hash`, `kind`, `rows`, `bytes`
+and `register_as` describe that product. **Named outputs (ADR-0141):** a stage that makes several
+products (a split's train, val and test files) also returns `outputs: [<name>, …]` with flat
+`outputs.<name>.<field>` stats for the same fields plus `register_role`. Each name becomes a
+descriptor in `DataflowResult.named_outputs` with the stage's parents (the products are siblings
+of the stage's descriptor; the next stage descends from the stage). A named output without
+`output` and `content_hash` fails the flow; an `outputs` stat with no `outputs.<name>.*` key is
+the kernel's own. `named_outputs` is omitted from the JSON while empty. The control plane
+registers both lists through `register_leg_descriptors`; a descriptor carrying `register_as`
+becomes a dataset version with `register_role` as its role when set (else the dataset's default
+role). A stage may give only `training`, `validation` or `test`; any other role refuses the leg
+before anything registers.
+
 ## What cairn owns
 Admission and governance before submit, the record, the handle for re-attach
 (`StepState.handle`), budget reservation/settlement, the poll loop with backoff
@@ -85,7 +101,7 @@ proof for Metaflow is `tests/core/test_training_core_golden_path.py::test_the_sa
 ## Local vs remote boundaries
 The control plane never reaches into a box for rows; a box never reaches the database.
 Remote execution moves **the image and the spec** (ADR-0104): the GPU trainer image is built
-by CI and pinned by tag (`RUNBOOK-gpu-finetune-ssh.md`), secrets reach the flow as a scoped
+by CI and pinned by tag, secrets reach the flow as a scoped
 set (ADR-0089 D3), tracking credentials are forwarded by the `run-train-remote` binding.
 Doors that refuse before a record exists: job-channel, SkyPilot, pull-worker
 (`dispatcher.py:888-911`, `pipeline_launch.py:283`).
